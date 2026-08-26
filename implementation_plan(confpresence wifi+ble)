@@ -1,0 +1,115 @@
+# Implementation Plan: Dual-Sensor Synchronization, Server Diagnostics & In-Room Presence Enhancements
+
+Address all approved problem statements: add live server connectivity diagnostics, enable optimistic presenter room hosting, update the subtitle to **"Zero-Hardware Dual-Sensor Presence Engine (BLE + Wi-Fi)"**, harden BLE token resolution, and display real-time dual-sensor confidence and Wi-Fi match metrics in the UI.
+
+---
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Key Enhancements**:
+> 1. **Live Server Health Indicator**: Real-time badge (`🟢 Connected (3s sync)` / `🔴 Server Unreachable`) and explicit network error banner so you immediately know if the backend IP needs updating.
+> 2. **Immediate Presenter Hosting**: Presenter device immediately renders itself as active Host in the in-room table without waiting for server network round-trips.
+> 3. **Dual-Sensor Table Display**: Confirmed participants display live confidence scores (e.g., `98% Confirmed`) and Wi-Fi similarity badges (e.g., `📶 100% Wi-Fi Match`).
+> 4. **Token Resolution Hardening**: Synchronize BLE advertisement payload to full 16 bytes across Kotlin native code and TypeScript to ensure 100% peer graph edge resolution.
+> 5. **Fresh APK Build**: Automatic re-bundling of `index.android.bundle` and Gradle compilation into `outputs/ConfPresence-ZERO.apk`.
+
+---
+
+## Proposed Changes
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   ConfPresence ZERO Mobile Client                       │
+├────────────────────────────────────────────────────────────────────────┤
+│ [Header] ConfPresence ZERO                                              │
+│ [Subtitle] Zero-Hardware Dual-Sensor Presence Engine (BLE + Wi-Fi)      │
+│                                                                        │
+│ [Server Status Badge] 🟢 Server: http://192.168.0.110:3000 (Connected) │
+│                                                                        │
+│ [Live Connected Presence Grid]                                         │
+│ ┌──────────────────┐  ┌──────────────────┐  ┌────────────────────────┐ │
+│ │        1         │  │        9         │  │           2            │ │
+│ │    BLE Peers     │  │    Wi-Fi APs     │  │    In Room (room-a)    │ │
+│ └──────────────────┘  └──────────────────┘  └────────────────────────┘ │
+│                                                                        │
+│ [In-Room Participants Table]                                           │
+│ • Thaqib (You)     [Host]     100% Confirmed                           │
+│ • Taiyaba          [User]     98% Confirmed  (📶 100% Wi-Fi Match)     │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 1. Mobile UI & Client-Side Logic (`apps/mobile`)
+
+#### [MODIFY] [App.tsx](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/apps/mobile/App.tsx)
+- Update subtitle from `"Zero-hardware BLE mesh POC"` to `"Zero-Hardware Dual-Sensor Presence Engine (BLE + Wi-Fi)"`.
+- Update default IP address to `http://192.168.0.110:3000`.
+- Add `serverConnected: boolean` state:
+  - Display `🟢 Connected` or `🔴 Unreachable (Check laptop IP)` badge on the server card.
+  - If fetch fails, show connection error banner with guidance.
+- Implement Optimistic Presenter Hosting:
+  - If `role === "presenter"` and `running === true`, include presenter in `roomMembers` list even before server responds.
+- In-Room Table Enhancements:
+  - Display participant `confidence` (e.g. `98%`) and `wifiSimilarity` (e.g. `📶 100% Wi-Fi Match`).
+
+#### [MODIFY] [presenceService.ts](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/apps/mobile/src/services/presenceService.ts)
+- Update default fallback API URL to `http://192.168.0.110:3000`.
+- Expose connection state callback or error logging so `App.tsx` can display connectivity status accurately.
+
+#### [MODIFY] [deviceIdentity.ts](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/apps/mobile/src/services/deviceIdentity.ts)
+- Standardize `createRotatingId` to generate a 16-character token (`8-char-prefix` + `-` + `7-char-epoch`) to match the 16-byte BLE service data slot.
+
+---
+
+### 2. Android Native BLE Module (`apps/mobile/android`)
+
+#### [MODIFY] [ConfPresenceBleModule.kt](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/apps/mobile/android/app/src/main/java/com/confpresence/zero/ble/ConfPresenceBleModule.kt)
+- Update payload buffer to 16 bytes:
+  ```kotlin
+  val payload = rotatingId.toByteArray(StandardCharsets.UTF_8).copyOf(16)
+  ```
+- Ensure parser handles both full 16-byte and trimmed token strings seamlessly.
+
+---
+
+### 3. Backend API & Inference Engine (`apps/api`)
+
+#### [MODIFY] [inference.ts](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/apps/api/src/inference.ts)
+- Enhance token resolver:
+  - Match direct token `tokenToDevice.get(token)`.
+  - Fallback to matching by device ID suffix/prefix.
+  - Fallback to matching by raw token substring.
+- Ensure `roomState` always returns the active presenter in the `members` array with `role: "presenter"`, `confidence: 1.0`.
+
+---
+
+### 4. Build & Distribution
+
+- Run Metro bundler to export fresh `index.android.bundle` into `apps/mobile/android/app/src/main/assets/`.
+- Run `./gradlew.bat assembleDebug` to build the new APK.
+- Copy fresh build to `outputs/ConfPresence-ZERO.apk`.
+
+---
+
+## Verification Plan
+
+### Automated Verification
+1. **Typecheck & Monorepo Verification**:
+   ```powershell
+   pnpm -r typecheck
+   ```
+2. **API Inference Unit Tests**:
+   ```powershell
+   pnpm --filter @confpresence/api test
+   ```
+
+### Manual Verification
+1. **Server Connectivity**:
+   - Start API on laptop (`pnpm --filter @confpresence/api dev`).
+   - Open mobile app: Verify server status badge displays `🟢 Connected`.
+2. **Presenter Immediate Display**:
+   - Select Presenter, toggle Share presence: Verify Host is immediately visible in the table.
+3. **Dual-Phone Presence & Wi-Fi Match**:
+   - Turn on Share presence on Attendee: Verify Attendee appears in Presenter's table and Presenter appears in Attendee's table with `In Room: 2`, `98% Confirmed`, and `100% Wi-Fi Match`.

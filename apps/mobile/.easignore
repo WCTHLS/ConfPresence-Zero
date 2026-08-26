@@ -1,0 +1,13 @@
+# EAS Build ignore rules
+node_modules/
+.expo/
+.pnpm-store/
+
+# Android native build artifacts
+android/app/build/
+android/.gradle/
+android/build/
+
+# iOS native build artifacts
+ios/Pods/
+ios/build/

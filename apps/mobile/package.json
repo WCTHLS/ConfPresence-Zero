@@ -1,0 +1,25 @@
+{
+  "name": "@confpresence/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "App.tsx",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "prebuild": "expo prebuild --platform android",
+    "typecheck": "tsc --noEmit",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@confpresence/shared": "workspace:*",
+    "expo": "^54.0.0",
+    "expo-dev-client": "^6.0.0",
+    "expo-status-bar": "~3.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
+  }
+}
