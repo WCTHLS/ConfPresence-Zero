@@ -19,12 +19,16 @@ import { getOrCreateDeviceId } from "./src/services/deviceIdentity";
 
 const DEFAULT_SESSION = "poc-session";
 const DEFAULT_ROOMS = ["room-a", "room-b", "auditorium"];
-const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://192.168.0.195:3000";
+const CLOUD_API_URL = "https://confpresence-api.onrender.com";
+const LOCAL_API_URL = "http://192.168.0.195:3000";
+const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL ?? CLOUD_API_URL;
 
 export default function App() {
   const [role, setRole] = useState<ParticipantRole>("attendee");
   const [sessionId, setSessionId] = useState(DEFAULT_SESSION);
+  const [serverEnv, setServerEnv] = useState<"cloud" | "local" | "custom">("cloud");
   const [serverUrl, setServerUrl] = useState(DEFAULT_API_URL);
+  const [serverHealth, setServerHealth] = useState<"checking" | "online" | "offline">("checking");
   const [showServerConfig, setShowServerConfig] = useState(false);
   const [displayName, setDisplayName] = useState("");
   const [rooms, setRooms] = useState<string[]>(DEFAULT_ROOMS);
@@ -42,8 +46,29 @@ export default function App() {
 
   const service = useMemo(() => new PresenceService(setStatus), []);
 
+  const checkHealth = async (url: string) => {
+    setServerHealth("checking");
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`${url}/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        setServerHealth("online");
+        setServerConnected(true);
+      } else {
+        setServerHealth("offline");
+        setServerConnected(false);
+      }
+    } catch {
+      setServerHealth("offline");
+      setServerConnected(false);
+    }
+  };
+
   useEffect(() => {
     getOrCreateDeviceId().then(setDeviceId);
+    checkHealth(DEFAULT_API_URL);
     return () => {
       runningRef.current = false;
       void service.stop();
@@ -64,6 +89,7 @@ export default function App() {
 
       if (res.ok) {
         setServerConnected(true);
+        setServerHealth("online");
         const data = await res.json();
         if (!runningRef.current) return;
 
@@ -103,6 +129,7 @@ export default function App() {
       } else {
         if (!runningRef.current) return;
         setServerConnected(false);
+        setServerHealth("offline");
         if (role === "presenter") {
           setRoomMembers([{
             deviceId,
@@ -115,6 +142,7 @@ export default function App() {
     } catch {
       if (!runningRef.current) return;
       setServerConnected(false);
+      setServerHealth("offline");
       if (role === "presenter") {
         setRoomMembers([{
           deviceId,
@@ -136,7 +164,6 @@ export default function App() {
     }
 
     runningRef.current = true;
-    // Set initial optimistic host view for presenter right on start
     if (role === "presenter" && deviceId) {
       setRoomMembers([{
         deviceId,
@@ -184,9 +211,11 @@ export default function App() {
     const candidateIPs = [
       serverUrl,
       "http://192.168.0.195:3000",
+      "http://192.168.0.146:3000",
       "http://192.168.0.110:3000",
       "http://192.168.0.100:3000",
-      "http://192.168.1.195:3000"
+      "http://192.168.1.195:3000",
+      "http://10.0.2.2:3000"
     ];
     const unique = Array.from(new Set(candidateIPs));
 
@@ -201,8 +230,9 @@ export default function App() {
           if (data.ok) {
             setServerUrl(base);
             setServerConnected(true);
+            setServerHealth("online");
             setIsAutoDetecting(false);
-            Alert.alert("Server Discovered!", `Connected to laptop API server at:\n${base}`);
+            Alert.alert("Local Server Discovered! 💻", `Connected to laptop API server at:\n${base}`);
             return;
           }
         }
@@ -211,6 +241,7 @@ export default function App() {
       }
     }
     setIsAutoDetecting(false);
+    setServerHealth("offline");
     Alert.alert("Auto-Detect Failed", "Could not reach laptop API on local Wi-Fi. Make sure `pnpm --filter @confpresence/api dev` is running on your laptop.");
   };
 
@@ -240,12 +271,14 @@ export default function App() {
     }
   };
 
+  const activeRoomTitle = role === "presenter" ? roomId : detectedRoom ? detectedRoom : "Searching...";
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>ConfPresence ZERO</Text>
-        <Text style={styles.subtitle}>Zero-Hardware Dual-Sensor Presence Engine (BLE + Wi-Fi)</Text>
+        <Text style={styles.subtitle}>Zero-hardware BLE mesh POC</Text>
 
         <Text style={styles.label}>Role</Text>
         <View style={styles.roleRow}>
@@ -378,64 +411,43 @@ export default function App() {
               <Text style={styles.statLabel}>Wi-Fi APs</Text>
             </View>
             <View style={styles.statBox}>
-              <Text style={styles.statNumber}>{running ? roomMembers.length : 0}</Text>
+              <Text style={styles.statNumber}>{roomMembers.length}</Text>
               <Text style={styles.statLabel}>
                 {role === "presenter"
-                  ? `In Room\n(${roomId})`
+                  ? `In Room (${roomId})`
                   : detectedRoom
-                  ? `In Room\n(${detectedRoom})`
-                  : "In Room\n(Searching)"}
+                  ? `In Room (${detectedRoom})`
+                  : "In Room (Searching...)"}
               </Text>
             </View>
           </View>
 
           {/* In-Room Participants Table */}
-          {running && roomMembers.length > 0 && (
+          {roomMembers.length > 0 && (
             <View style={styles.tableContainer}>
               <Text style={styles.tableTitle}>
-                Confirmed In-Room Participants ({role === "presenter" ? roomId : detectedRoom || "room-a"}):
+                Confirmed In-Room Participants ({activeRoomTitle}):
               </Text>
               
               {/* Table Header Row */}
               <View style={styles.tableHeaderRow}>
-                <Text style={[styles.tableColHeader, { flex: 1.1 }]}>Participant</Text>
-                <Text style={[styles.tableColHeader, { flex: 1.1 }]}>Signals / Confidence</Text>
-                <Text style={[styles.tableColHeader, { width: 55, textAlign: "right" }]}>Role</Text>
+                <Text style={[styles.tableColHeader, { flex: 1.3 }]}>Participant Name</Text>
+                <Text style={[styles.tableColHeader, { flex: 1.1 }]}>Device ID</Text>
+                <Text style={[styles.tableColHeader, { width: 68, textAlign: "right" }]}>Role</Text>
               </View>
 
               {/* Table Content Rows */}
               {roomMembers.map((member, index) => {
                 const isMe = member.deviceId === deviceId;
-                const confPercent = Math.round((member.confidence ?? 0.85) * 100);
-                const wifiPercent = member.wifiSimilarity !== undefined ? Math.round(member.wifiSimilarity * 100) : undefined;
-
                 return (
                   <View key={member.deviceId || index} style={[styles.tableRow, isMe && styles.tableRowMe]}>
-                    <View style={{ flex: 1.1 }}>
-                      <Text style={styles.tableCellName} numberOfLines={1}>
-                        {member.displayName || member.deviceId} {isMe ? "(You)" : ""}
-                      </Text>
-                      <Text style={styles.tableCellId} numberOfLines={1}>
-                        {member.deviceId}
-                      </Text>
-                    </View>
-
-                    <View style={{ flex: 1.1, gap: 2 }}>
-                      <Text style={styles.confText}>
-                        🟢 {confPercent}% Confidence
-                      </Text>
-                      {wifiPercent !== undefined ? (
-                        <Text style={styles.wifiMatchText}>
-                          📶 {wifiPercent}% Wi-Fi Match
-                        </Text>
-                      ) : (
-                        <Text style={styles.bleMeshText}>
-                          📡 BLE Mesh Edge
-                        </Text>
-                      )}
-                    </View>
-
-                    <View style={{ width: 55, alignItems: "flex-end" }}>
+                    <Text style={[styles.tableCellName, { flex: 1.3 }]} numberOfLines={1}>
+                      {member.displayName || member.deviceId} {isMe ? "(You)" : ""}
+                    </Text>
+                    <Text style={[styles.tableCellId, { flex: 1.1 }]} numberOfLines={1}>
+                      {member.deviceId}
+                    </Text>
+                    <View style={{ width: 68, alignItems: "flex-end" }}>
                       <Text style={[styles.roleBadge, member.role === "presenter" ? styles.roleBadgePresenter : styles.roleBadgeAttendee]}>
                         {member.role === "presenter" ? "Host" : "User"}
                       </Text>
@@ -459,7 +471,6 @@ export default function App() {
               Detected Room: {detectedRoom ? detectedRoom : "Searching for active presenter..."}
             </Text>
           )}
-          <Text style={styles.cardText}>Visible Wi-Fi APs: {status.wifiApCount ?? 0}</Text>
           <Text style={styles.cardText}>Current rotating token: {status.rotatingId ?? "Not active"}</Text>
           {status.error && <Text style={styles.error}>{status.error}</Text>}
         </View>
@@ -471,44 +482,114 @@ export default function App() {
             onPress={() => setShowServerConfig(!showServerConfig)}
             activeOpacity={0.7}
           >
-            <Text style={styles.serverHeaderText}>
-              ⚙️ Server: {serverUrl}{" "}
-              {serverConnected === true
-                ? "🟢 Connected"
-                : serverConnected === false
-                ? "🔴 Unreachable"
-                : ""}
-            </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+              <Text style={styles.serverHeaderText}>
+                ⚙️ {serverEnv === "cloud" ? "☁️ Cloud Server (Default)" : serverEnv === "local" ? "💻 Local Laptop" : "✏️ Custom Server"}
+              </Text>
+              {serverHealth === "online" && <Text style={{ fontSize: 11, color: "#2E7D32", fontWeight: "700" }}>🟢 Online</Text>}
+              {serverHealth === "offline" && <Text style={{ fontSize: 11, color: "#C62828", fontWeight: "700" }}>🔴 Offline</Text>}
+              {serverHealth === "checking" && <Text style={{ fontSize: 11, color: "#E65100", fontWeight: "600" }}>⏳</Text>}
+            </View>
             <Text style={styles.serverToggleText}>{showServerConfig ? "▲ Hide" : "▼ Change"}</Text>
           </TouchableOpacity>
-          {serverConnected === false && (
-            <View style={styles.serverErrorBox}>
-              <Text style={styles.serverErrorText}>
-                ⚠️ Cannot connect to backend server at {serverUrl}. Make sure your laptop API is running (`pnpm --filter @confpresence/api dev`) and connected to the same Wi-Fi network.
-              </Text>
-            </View>
-          )}
+
+          {/* Collapsible Environment Switcher & Auto-Detection */}
           {showServerConfig && (
             <View style={styles.serverInputWrap}>
-              <Text style={styles.serverHelp}>Enter your laptop or backend server IP and port:</Text>
+              <Text style={styles.serverHelp}>Select Server Environment:</Text>
+              
+              {/* 1-Tap Preset Selector Chips */}
+              <View style={styles.envChipsRow}>
+                <TouchableOpacity
+                  disabled={running}
+                  style={[styles.envChip, serverEnv === "cloud" && styles.envChipSelected]}
+                  onPress={() => {
+                    setServerEnv("cloud");
+                    setServerUrl(CLOUD_API_URL);
+                    checkHealth(CLOUD_API_URL);
+                  }}
+                >
+                  <Text style={[styles.envChipText, serverEnv === "cloud" && styles.envChipTextSelected]}>
+                    ☁️ Cloud (Default)
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  disabled={running}
+                  style={[styles.envChip, serverEnv === "local" && styles.envChipSelected]}
+                  onPress={() => {
+                    setServerEnv("local");
+                    setServerUrl(LOCAL_API_URL);
+                    checkHealth(LOCAL_API_URL);
+                  }}
+                >
+                  <Text style={[styles.envChipText, serverEnv === "local" && styles.envChipTextSelected]}>
+                    💻 Local Laptop
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  disabled={running}
+                  style={[styles.envChip, serverEnv === "custom" && styles.envChipSelected]}
+                  onPress={() => setServerEnv("custom")}
+                >
+                  <Text style={[styles.envChipText, serverEnv === "custom" && styles.envChipTextSelected]}>
+                    ✏️ Custom
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Active URL Display & Custom Input */}
               <TextInput
-                editable={!running}
+                editable={!running && serverEnv === "custom"}
                 value={serverUrl}
-                onChangeText={setServerUrl}
-                placeholder="http://192.168.0.195:3000"
+                onChangeText={(val) => {
+                  setServerUrl(val);
+                  checkHealth(val);
+                }}
+                placeholder="https://confpresence-api.onrender.com"
                 placeholderTextColor="#8C9BA5"
-                style={styles.serverInput}
+                style={[styles.serverInput, serverEnv !== "custom" && { backgroundColor: "#F5F7FA" }]}
                 autoCapitalize="none"
               />
-              <TouchableOpacity
-                disabled={isAutoDetecting || running}
-                style={styles.autoDetectBtn}
-                onPress={autoDetectServerIP}
-              >
-                <Text style={styles.autoDetectBtnText}>
-                  {isAutoDetecting ? "🔍 Scanning Local Network..." : "🔍 Auto-Detect Laptop IP"}
+
+              {/* Status Banner */}
+              <View style={styles.serverStatusBanner}>
+                <Text style={styles.serverStatusBannerText}>
+                  {serverHealth === "online"
+                    ? "🟢 Connected & Ready for Presence Tracking"
+                    : serverHealth === "offline"
+                    ? "🔴 Server unreachable. Check Wi-Fi or backend server."
+                    : "⏳ Checking connection..."}
                 </Text>
-              </TouchableOpacity>
+              </View>
+
+              {/* Smart Cloud Fallback button when Local is offline */}
+              {serverEnv !== "cloud" && serverHealth === "offline" && (
+                <TouchableOpacity
+                  style={styles.switchCloudBtn}
+                  onPress={() => {
+                    setServerEnv("cloud");
+                    setServerUrl(CLOUD_API_URL);
+                    checkHealth(CLOUD_API_URL);
+                  }}
+                >
+                  <Text style={styles.switchCloudBtnText}>☁️ Switch Back to Cloud (Recommended)</Text>
+                </TouchableOpacity>
+              )}
+
+              {/* Auto-Detect Local Laptop Button */}
+              {serverEnv !== "cloud" && (
+                <TouchableOpacity
+                  disabled={isAutoDetecting || running}
+                  style={styles.autoDetectBtn}
+                  onPress={autoDetectServerIP}
+                >
+                  <Text style={styles.autoDetectBtnText}>
+                    {isAutoDetecting ? "🔍 Scanning Local Subnet..." : "🔍 Auto-Detect Local Laptop IP"}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>
@@ -675,21 +756,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#ECEFF1",
     color: "#455A64"
   },
-  confText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#00695C"
-  },
-  wifiMatchText: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#1565C0"
-  },
-  bleMeshText: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: "#6A1B9A"
-  },
 
   card: { backgroundColor: "#FFFFFF", borderRadius: 10, padding: 16, gap: 6, borderWidth: 1, borderColor: "#D9E3E8" },
   cardTitle: { fontWeight: "700", color: "#126D7A", fontSize: 15 },
@@ -701,21 +767,25 @@ const styles = StyleSheet.create({
   serverHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   serverHeaderText: { fontSize: 12, color: "#173A63", fontWeight: "600" },
   serverToggleText: { fontSize: 12, color: "#00695C", fontWeight: "700" },
-  serverErrorBox: {
-    marginTop: 8,
-    backgroundColor: "#FFEBEE",
-    borderColor: "#EF5350",
-    borderWidth: 1,
+  serverInputWrap: { marginTop: 8, gap: 6 },
+  serverHelp: { fontSize: 11, color: "#5D6873", fontWeight: "600" },
+  envChipsRow: { flexDirection: "row", gap: 8, marginTop: 2, marginBottom: 4 },
+  envChip: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    backgroundColor: "#FFFFFF",
     borderRadius: 6,
-    padding: 8
+    borderWidth: 1.5,
+    borderColor: "#C8D3DA",
+    alignItems: "center"
   },
-  serverErrorText: {
-    fontSize: 11,
-    color: "#C62828",
-    lineHeight: 15
+  envChipSelected: {
+    backgroundColor: "#126D7A",
+    borderColor: "#126D7A"
   },
-  serverInputWrap: { marginTop: 8, gap: 4 },
-  serverHelp: { fontSize: 11, color: "#5D6873" },
+  envChipText: { fontSize: 11, color: "#173A63", fontWeight: "700" },
+  envChipTextSelected: { color: "#FFFFFF" },
   serverInput: {
     borderColor: "#B0C4D3",
     borderWidth: 1,
@@ -723,19 +793,41 @@ const styles = StyleSheet.create({
     padding: 8,
     backgroundColor: "#FFFFFF",
     color: "#173A63",
-    fontSize: 13
+    fontSize: 12
+  },
+  serverStatusBanner: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 4,
+    backgroundColor: "#E8F5E9"
+  },
+  serverStatusBannerText: {
+    fontSize: 11,
+    color: "#2E7D32",
+    fontWeight: "600"
+  },
+  switchCloudBtn: {
+    backgroundColor: "#00796B",
+    paddingVertical: 7,
+    borderRadius: 6,
+    alignItems: "center",
+    marginTop: 2
+  },
+  switchCloudBtnText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "700"
   },
   autoDetectBtn: {
-    marginTop: 6,
-    backgroundColor: "#126D7A",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    backgroundColor: "#455A64",
+    paddingVertical: 7,
     borderRadius: 6,
-    alignItems: "center"
+    alignItems: "center",
+    marginTop: 2
   },
   autoDetectBtnText: {
     color: "#FFFFFF",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "700"
   },
 
