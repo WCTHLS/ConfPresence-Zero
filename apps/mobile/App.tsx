@@ -439,18 +439,36 @@ export default function App() {
               {/* Table Content Rows */}
               {roomMembers.map((member, index) => {
                 const isMe = member.deviceId === deviceId;
+                const isHost = member.role === "presenter";
+                const confPct = Math.round((member.confidence ?? (isHost ? 1.0 : 0.95)) * 100);
+                const wifiPct = member.wifiSimilarity != null ? Math.round(member.wifiSimilarity * 100) : null;
+
                 return (
                   <View key={member.deviceId || index} style={[styles.tableRow, isMe && styles.tableRowMe]}>
-                    <Text style={[styles.tableCellName, { flex: 1.3 }]} numberOfLines={1}>
-                      {member.displayName || member.deviceId} {isMe ? "(You)" : ""}
-                    </Text>
-                    <Text style={[styles.tableCellId, { flex: 1.1 }]} numberOfLines={1}>
-                      {member.deviceId}
-                    </Text>
-                    <View style={{ width: 68, alignItems: "flex-end" }}>
-                      <Text style={[styles.roleBadge, member.role === "presenter" ? styles.roleBadgePresenter : styles.roleBadgeAttendee]}>
-                        {member.role === "presenter" ? "Host" : "User"}
+                    <View style={styles.tableRowTop}>
+                      <Text style={[styles.tableCellName, { flex: 1.3 }]} numberOfLines={1}>
+                        {member.displayName || member.deviceId} {isMe ? "(You)" : ""}
                       </Text>
+                      <Text style={[styles.tableCellId, { flex: 1.1 }]} numberOfLines={1}>
+                        {member.deviceId}
+                      </Text>
+                      <View style={{ width: 68, alignItems: "flex-end" }}>
+                        <Text style={[styles.roleBadge, isHost ? styles.roleBadgePresenter : styles.roleBadgeAttendee]}>
+                          {isHost ? "Host" : "User"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Sensor Metrics Row: Confidence & Wi-Fi Match */}
+                    <View style={styles.tableRowMetrics}>
+                      <Text style={styles.confText}>🎯 {confPct}% Conf</Text>
+                      {isHost ? (
+                        <Text style={styles.wifiMatchText}>📶 Wi-Fi Anchor</Text>
+                      ) : wifiPct != null ? (
+                        <Text style={styles.wifiMatchText}>📶 Wi-Fi: {wifiPct}% match</Text>
+                      ) : (
+                        <Text style={styles.bleMeshText}>📡 BLE Proximity</Text>
+                      )}
                     </View>
                   </View>
                 );
@@ -716,15 +734,27 @@ const styles = StyleSheet.create({
     textTransform: "uppercase"
   },
   tableRow: {
-    flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#FFFFFF",
     paddingVertical: 8,
     paddingHorizontal: 8,
     borderRadius: 6,
-    marginVertical: 2,
+    marginVertical: 3,
     borderWidth: 1,
-    borderColor: "#E0E0E0"
+    borderColor: "#E0E0E0",
+    gap: 4
+  },
+  tableRowTop: {
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  tableRowMetrics: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginTop: 2,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: "#F0F4F8"
   },
   tableRowMe: {
     backgroundColor: "#E0F2F1",
@@ -755,6 +785,21 @@ const styles = StyleSheet.create({
   roleBadgeAttendee: {
     backgroundColor: "#ECEFF1",
     color: "#455A64"
+  },
+  confText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#00695C"
+  },
+  wifiMatchText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0D47A1"
+  },
+  bleMeshText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#4A148C"
   },
 
   card: { backgroundColor: "#FFFFFF", borderRadius: 10, padding: 16, gap: 6, borderWidth: 1, borderColor: "#D9E3E8" },
