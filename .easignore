@@ -6,5 +6,5 @@ outputs/
 apps/mobile/android/app/build/
 apps/mobile/android/.gradle/
 apps/mobile/android/build/
-apps/mobile/ios/Pods/
-apps/mobile/ios/build/
+# Whole ios/ folder: see apps/mobile/.easignore for why.
+apps/mobile/ios/

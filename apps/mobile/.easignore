@@ -8,6 +8,9 @@ android/app/build/
 android/.gradle/
 android/build/
 
-# iOS native build artifacts
-ios/Pods/
-ios/build/
+# Whole ios/ folder: keeps EAS Build's CNG detection treating this project as
+# prebuild-managed for iOS, since it otherwise treats any existing ios/
+# folder as a bare native project and skips prebuild entirely. Native module
+# sources live in native-ios/ instead (not excluded), which the
+# withConfPresenceNativeModules plugin copies into ios/ during prebuild.
+ios/

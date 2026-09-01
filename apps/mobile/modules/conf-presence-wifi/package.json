@@ -1,0 +1,12 @@
+{
+  "name": "conf-presence-wifi",
+  "version": "0.1.0",
+  "description": "Wi-Fi fingerprint reporting for ConfPresence ZERO",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "keywords": ["react-native", "expo", "conf-presence-wifi"],
+  "author": "ConfPresence",
+  "license": "MIT",
+  "homepage": "https://docs.expo.dev/modules/"
+}

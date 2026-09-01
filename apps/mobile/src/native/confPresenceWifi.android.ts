@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from "react-native";
+import { NativeModules } from "react-native";
 import type { WifiApObservation } from "@confpresence/shared";
 
 type WifiNativeModule = {
@@ -8,9 +8,7 @@ type WifiNativeModule = {
 const nativeModule = NativeModules.ConfPresenceWifi as WifiNativeModule | undefined;
 
 export async function getWifiFingerprint(): Promise<WifiApObservation[]> {
-  if ((Platform.OS !== "android" && Platform.OS !== "ios") || !nativeModule) {
-    return [];
-  }
+  if (!nativeModule) return [];
   try {
     const results = await nativeModule.getWifiFingerprint();
     return Array.isArray(results) ? results : [];

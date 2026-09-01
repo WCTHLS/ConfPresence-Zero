@@ -1,4 +1,4 @@
-import { NativeEventEmitter, NativeModules, Platform } from "react-native";
+import { NativeEventEmitter, NativeModules } from "react-native";
 
 export type NativePeer = { rotatingId: string; rssi: number; seenAt: string };
 
@@ -14,9 +14,6 @@ type BleNativeModule = {
 const nativeModule = NativeModules.ConfPresenceBle as BleNativeModule | undefined;
 
 export function requireBleModule(): BleNativeModule {
-  if (Platform.OS !== "android" && Platform.OS !== "ios") {
-    throw new Error("ConfPresence BLE supports Android and iOS physical devices.");
-  }
   if (!nativeModule) {
     throw new Error("ConfPresence BLE native module is not installed. Rebuild the app development build.");
   }

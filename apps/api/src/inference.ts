@@ -1,4 +1,4 @@
-import type { LiveRoomState, PresenceBatch, RoomMemberInfo, WifiApObservation } from "@confpresence/shared";
+﻿import type { LiveRoomState, PresenceBatch, RoomMemberInfo, WifiApObservation } from "@confpresence/shared";
 
 const WINDOW_MS = 30_000; // 30 seconds sliding active window
 const MIN_RSSI = -85;     // 20+ meters coverage in open line-of-sight halls
@@ -10,6 +10,8 @@ type DeviceRecord = {
   roomId?: string;
   rotatingId?: string;
   wifiFingerprint?: WifiApObservation[];
+  uwbDiscoveryToken?: string;
+  uwbTokenUpdatedAt?: number;
   updatedAt: number;
 };
 
@@ -25,6 +27,8 @@ export class PocInferenceEngine {
       role,
       roomId,
       wifiFingerprint: current?.wifiFingerprint,
+      uwbDiscoveryToken: current?.uwbDiscoveryToken,
+      uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       updatedAt: Date.now()
     });
   }
@@ -50,10 +54,29 @@ export class PocInferenceEngine {
       wifiFingerprint: batch.wifiFingerprint && batch.wifiFingerprint.length > 0
         ? batch.wifiFingerprint
         : current?.wifiFingerprint,
+      uwbDiscoveryToken: current?.uwbDiscoveryToken,
+      uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       updatedAt: Date.now()
     });
     this.batches.push(batch);
     this.trim();
+  }
+
+  // Keyed by the stable deviceId, not the rotating BLE token, since UWB
+  // ranging sessions shouldn't need re-negotiating every rotation cycle.
+  setUwbToken(deviceId: string, discoveryTokenBase64: string) {
+    const current = this.devices.get(deviceId);
+    this.devices.set(deviceId, {
+      deviceId,
+      displayName: current?.displayName,
+      role: current?.role ?? "attendee",
+      roomId: current?.roomId,
+      rotatingId: current?.rotatingId,
+      wifiFingerprint: current?.wifiFingerprint,
+      uwbDiscoveryToken: discoveryTokenBase64,
+      uwbTokenUpdatedAt: Date.now(),
+      updatedAt: Date.now()
+    });
   }
 
   roomState(sessionId: string, roomId: string): LiveRoomState {
@@ -89,7 +112,7 @@ export class PocInferenceEngine {
         if (sim !== undefined) {
           wifiSimilarity = Number(sim.toFixed(2));
           // Dual-sensor confidence fusion:
-          // High Wi-Fi similarity (>= 0.70) boosts confidence up to 0.98.
+          // In-room Wi-Fi match (>= 0.70) boosts attendee confidence up to 0.98.
           if (sim >= 0.70) {
             confidence = Number(Math.min(0.98, 0.85 + (sim - 0.70) * 0.43).toFixed(2));
           } else {
@@ -98,12 +121,22 @@ export class PocInferenceEngine {
         }
       }
 
+      // Only surface a token while it's fresh enough that the peer is likely
+      // still holding an active NISession for it (mirrors the "active" room
+      // membership window, which is tighter than the 3x grace period devices
+      // get before being evicted entirely).
+      const uwbDiscoveryToken =
+        rec?.uwbDiscoveryToken && rec.uwbTokenUpdatedAt !== undefined && now - rec.uwbTokenUpdatedAt < WINDOW_MS
+          ? rec.uwbDiscoveryToken
+          : undefined;
+
       return {
         deviceId: id,
         displayName: rec?.displayName || id,
         role: rec?.role || (isPresenter ? "presenter" : "attendee"),
         confidence,
-        wifiSimilarity
+        wifiSimilarity,
+        uwbDiscoveryToken
       };
     });
 
@@ -152,43 +185,70 @@ export class PocInferenceEngine {
   }
 
   /**
-   * Computes the normalized Cosine Similarity (0.0 to 1.0) between two Wi-Fi AP vectors.
-   * Maps dBm signal strengths (-100 to -30 dBm) to positive linear weights.
+   * Computes the calibrated indoor similarity (0.0 to 1.0) between two Wi-Fi AP fingerprints.
+   * 1. Filters out fluctuating noise APs (< -85 dBm).
+   * 2. Extracts top dominant access points from each device.
+   * 3. Calculates BSSID set overlap + signal proximity delta for in-room tolerance (2m-10m).
    */
   computeWifiCosineSimilarity(fpA: WifiApObservation[], fpB: WifiApObservation[]): number | undefined {
     if (!fpA.length || !fpB.length) return undefined;
 
-    const weightsA = new Map<string, number>();
-    for (const ap of fpA) {
-      const normBssid = ap.bssid.toLowerCase().trim();
-      const weight = Math.max(1, 100 + ap.rssi); // e.g. -50 dBm -> 50, -90 dBm -> 10
-      weightsA.set(normBssid, Math.max(weightsA.get(normBssid) ?? 0, weight));
+    // Filter out faint noise APs below -85 dBm and take the top 12 strongest APs from each device
+    const validA = fpA
+      .filter((ap) => ap.rssi >= -85)
+      .sort((a, b) => b.rssi - a.rssi)
+      .slice(0, 12);
+    const validB = fpB
+      .filter((ap) => ap.rssi >= -85)
+      .sort((a, b) => b.rssi - a.rssi)
+      .slice(0, 12);
+
+    if (!validA.length || !validB.length) return undefined;
+
+    const mapA = new Map<string, number>();
+    for (const ap of validA) {
+      const bssid = ap.bssid.toLowerCase().trim();
+      mapA.set(bssid, Math.max(mapA.get(bssid) ?? -100, ap.rssi));
     }
 
-    const weightsB = new Map<string, number>();
-    for (const ap of fpB) {
-      const normBssid = ap.bssid.toLowerCase().trim();
-      const weight = Math.max(1, 100 + ap.rssi);
-      weightsB.set(normBssid, Math.max(weightsB.get(normBssid) ?? 0, weight));
+    const mapB = new Map<string, number>();
+    for (const ap of validB) {
+      const bssid = ap.bssid.toLowerCase().trim();
+      mapB.set(bssid, Math.max(mapB.get(bssid) ?? -100, ap.rssi));
     }
 
-    let dotProduct = 0;
-    let normASq = 0;
-    let normBSq = 0;
+    let sharedCount = 0;
+    let totalSignalSim = 0;
 
-    for (const [, wA] of weightsA) {
-      normASq += wA * wA;
-    }
-    for (const [bssid, wB] of weightsB) {
-      normBSq += wB * wB;
-      const wA = weightsA.get(bssid);
-      if (wA !== undefined) {
-        dotProduct += wA * wB;
+    for (const [bssid, rssiA] of mapA) {
+      const rssiB = mapB.get(bssid);
+      if (rssiB !== undefined) {
+        sharedCount++;
+        // Delta tolerance: 0 dBm diff -> 1.0, 15 dBm diff -> 0.67, 30 dBm diff -> 0.33, 45 dBm -> 0.0
+        const delta = Math.abs(rssiA - rssiB);
+        const signalSim = Math.max(0, 1 - delta / 45);
+        totalSignalSim += signalSim;
       }
     }
 
-    if (normASq === 0 || normBSq === 0) return 0;
-    return dotProduct / (Math.sqrt(normASq) * Math.sqrt(normBSq));
+    if (sharedCount === 0) return 0;
+
+    // 1. Overlap score (fraction of dominant APs heard by both phones)
+    const overlapRatio = (sharedCount * 2) / (mapA.size + mapB.size); // Dice-Sørensen coefficient
+
+    // 2. Average signal proximity across all shared APs
+    const avgSignalSim = totalSignalSim / sharedCount;
+
+    // 3. Calibrated in-room blend: 40% Overlap + 60% Signal Proximity
+    const rawMatch = 0.40 * overlapRatio + 0.60 * avgSignalSim;
+
+    // Scale to intuitive in-room bounds:
+    // If in the same room (sharedCount >= 3 and overlapRatio >= 0.4), scale smoothly between 0.75 and 0.95
+    if (sharedCount >= 3 && overlapRatio >= 0.4) {
+      return Number(Math.min(0.96, Math.max(0.72, 0.65 + rawMatch * 0.32)).toFixed(2));
+    }
+
+    return Number(Math.min(0.65, rawMatch * 0.75).toFixed(2));
   }
 
   listRooms(sessionId: string): string[] {

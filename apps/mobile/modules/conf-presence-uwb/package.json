@@ -1,0 +1,12 @@
+{
+  "name": "conf-presence-uwb",
+  "version": "0.1.0",
+  "description": "UWB precise ranging for ConfPresence ZERO",
+  "main": "index.ts",
+  "types": "index.ts",
+  "scripts": {},
+  "keywords": ["react-native", "expo", "conf-presence-uwb"],
+  "author": "ConfPresence",
+  "license": "MIT",
+  "homepage": "https://docs.expo.dev/modules/"
+}

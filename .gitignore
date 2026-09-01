@@ -34,8 +34,10 @@ apps/mobile/android/local.properties
 # iOS native build artifacts
 ios/Pods/
 ios/build/
-apps/mobile/ios/Pods/
-apps/mobile/ios/build/
+# Whole folder: purely expo prebuild output, no hand-maintained files live
+# here (those are in apps/mobile/native-ios/, copied in by the config plugin
+# during prebuild).
+apps/mobile/ios/
 
 # Keystores (ignore private keys, allow debug.keystore)
 *.keystore
