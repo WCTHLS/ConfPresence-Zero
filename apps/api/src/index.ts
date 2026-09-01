@@ -1,4 +1,4 @@
-import cors from "cors";
+﻿import cors from "cors";
 import express from "express";
 import { z } from "zod";
 import { PocInferenceEngine } from "./inference.js";
@@ -52,22 +52,39 @@ app.get("/api/health", (_request, response) => response.json({ ok: true }));
 app.post("/api/session/join", (request, response) => {
   const parsed = joinSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
-  engine.join(parsed.data.deviceId, parsed.data.role, parsed.data.roomId, parsed.data.displayName);
+  
+  const { deviceId, role, roomId, displayName } = parsed.data;
+  engine.join(deviceId, role, roomId, displayName);
+  
+  const roleEmoji = role === "presenter" ? "👑 [PRESENTER]" : "👤 [ATTENDEE]";
+  console.log(`🟢 ${roleEmoji} ${displayName || deviceId} joined room '${roomId || "unassigned"}' (Session: ${parsed.data.sessionId})`);
+  
   return response.status(201).json({ ok: true });
 });
 
 app.post("/api/session/leave", (request, response) => {
   const parsed = leaveSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
+  
   engine.leave(parsed.data.deviceId);
+  console.log(`🔴 [LEAVE] Device ${parsed.data.deviceId} left session`);
+  
   return response.json({ ok: true });
 });
 
 app.post("/api/observations", (request, response) => {
   const parsed = batchSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
+  
   engine.ingest(parsed.data);
-  return response.status(202).json({ ok: true, peerCount: parsed.data.peers.length });
+  
+  const { displayName, deviceId, role, peers, wifiFingerprint, roomId } = parsed.data;
+  const name = displayName || deviceId.slice(-8);
+  const apCount = wifiFingerprint?.length ?? 0;
+  
+  console.log(`📡 [SENSOR] ${name} (${role}): ${peers.length} BLE peers heard, ${apCount} Wi-Fi APs scanned -> Room: ${roomId || "auto"}`);
+  
+  return response.status(202).json({ ok: true, peerCount: peers.length });
 });
 
 app.get("/api/rooms", (request, response) => {
@@ -75,9 +92,20 @@ app.get("/api/rooms", (request, response) => {
   return response.json({ rooms: engine.listRooms(sessionId) });
 });
 
+let lastLogTime = 0;
 app.get("/api/rooms/:roomId/live", (request, response) => {
   const sessionId = String(request.query.sessionId ?? "poc-session");
-  return response.json(engine.roomState(sessionId, request.params.roomId));
+  const state = engine.roomState(sessionId, request.params.roomId);
+  
+  // Throttle periodic room state summary logging to once every 15s to keep console clean
+  const now = Date.now();
+  if (now - lastLogTime > 15_000 && state.members.length > 0) {
+    lastLogTime = now;
+    const names = state.members.map((m: { displayName?: string; deviceId: string }) => m.displayName || m.deviceId.slice(-6)).join(", ");
+    console.log(`📊 [ROOM '${request.params.roomId}'] ${state.members.length} Confirmed In-Room: [${names}]`);
+  }
+  
+  return response.json(state);
 });
 
 app.get("/api/devices/:deviceId/live", (request, response) => {
@@ -86,5 +114,6 @@ app.get("/api/devices/:deviceId/live", (request, response) => {
 });
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`ConfPresence POC API listening on http://0.0.0.0:${port}`);
+  console.log(`🚀 ConfPresence POC API listening on http://0.0.0.0:${port}`);
+  console.log(`✨ Live Streaming Logs initialized. All connected device events will appear below.`);
 });
