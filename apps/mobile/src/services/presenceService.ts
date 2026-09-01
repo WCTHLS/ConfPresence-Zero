@@ -1,4 +1,4 @@
-import { PermissionsAndroid, Platform } from "react-native";
+﻿import { PermissionsAndroid, Platform } from "react-native";
 import type { ParticipantRole } from "@confpresence/shared";
 import { createRotatingId } from "./deviceIdentity";
 import { requireBleModule, subscribeToPeers, type NativePeer } from "../native/confPresenceBle";
@@ -63,6 +63,7 @@ export class PresenceService {
   private subscription?: { remove: () => void };
   private config?: StartConfig;
   private rotatingId?: string;
+  private isAdvertising = false;
   private lastWifiApCount = 0;
 
   constructor(private readonly onStatus: (status: PresenceStatus) => void) {}
@@ -72,6 +73,7 @@ export class PresenceService {
     this.lastWifiApCount = 0;
     this.peers.clear();
     this.activePeerCache.clear();
+    this.isAdvertising = false;
     this.onStatus({ state: "starting", peerCount: 0, wifiApCount: 0 });
     const granted = await requestBlePermissions();
     if (!granted) {
@@ -81,7 +83,7 @@ export class PresenceService {
     this.joinSession(config).catch(() => {
       // Offline / connecting
     });
-    await this.rotateAndAdvertise();
+    await this.rotateAndAdvertise(true);
     const ble = requireBleModule();
     this.subscription = subscribeToPeers((peer) => this.onPeer(peer));
     await ble.startScanning();
@@ -96,6 +98,7 @@ export class PresenceService {
     this.subscription = undefined;
     this.peers.clear();
     this.activePeerCache.clear();
+    this.isAdvertising = false;
     this.lastWifiApCount = 0;
 
     if (this.config) {
@@ -112,9 +115,9 @@ export class PresenceService {
   }
 
   private cleanExpiredPeers(now: number = Date.now()) {
-    // Keep peer count smooth across 30s sliding window (matching backend inference window)
+    // Keep peer count smooth across 90s sliding window
     for (const [key, item] of this.activePeerCache.entries()) {
-      if (now - item.lastSeenAt > 30_000) {
+      if (now - item.lastSeenAt > 90_000) {
         this.activePeerCache.delete(key);
       }
     }
@@ -138,12 +141,27 @@ export class PresenceService {
     });
   }
 
-  private async rotateAndAdvertise() {
+  private async rotateAndAdvertise(force = false) {
     if (!this.config) return;
-    this.rotatingId = createRotatingId(this.config.deviceId);
+    const nextToken = createRotatingId(this.config.deviceId);
+    if (!force && nextToken === this.rotatingId && this.isAdvertising) {
+      // Token has not changed (still in the same 60s epoch) and transmitter is running.
+      return;
+    }
+    this.rotatingId = nextToken;
     const ble = requireBleModule();
-    await ble.stopAdvertising();
-    await ble.startAdvertising(this.rotatingId);
+    try {
+      await ble.stopAdvertising();
+    } catch {
+      // Ignore stop errors
+    }
+    try {
+      await ble.startAdvertising(this.rotatingId);
+      this.isAdvertising = true;
+    } catch {
+      // If hardware was temporarily busy, keep state and retry on next tick
+      this.isAdvertising = false;
+    }
   }
 
   private async flushAndRotate() {
@@ -169,22 +187,19 @@ export class PresenceService {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body)
       });
-      await this.rotateAndAdvertise();
-      this.onStatus({
-        state: "running",
-        peerCount: this.activePeerCache.size,
-        wifiApCount: this.lastWifiApCount,
-        rotatingId: this.rotatingId
-      });
     } catch {
       // Keep BLE running smoothly even if temporary Wi-Fi jitter occurs
-      this.onStatus({
-        state: "running",
-        peerCount: this.activePeerCache.size,
-        wifiApCount: this.lastWifiApCount,
-        rotatingId: this.rotatingId
-      });
     }
+
+    // Only restart hardware transmitter if 60s token epoch has actually changed
+    await this.rotateAndAdvertise(false);
+
+    this.onStatus({
+      state: "running",
+      peerCount: this.activePeerCache.size,
+      wifiApCount: this.lastWifiApCount,
+      rotatingId: this.rotatingId
+    });
   }
 
   private async joinSession(config: StartConfig) {
