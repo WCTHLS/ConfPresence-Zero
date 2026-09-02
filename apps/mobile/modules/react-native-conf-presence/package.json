@@ -1,0 +1,9 @@
+{
+  "name": "react-native-conf-presence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ConfPresence BLE and Wi-Fi native bridges",
+  "main": "index.js",
+  "react-native": "index.js",
+  "license": "UNLICENSED"
+}

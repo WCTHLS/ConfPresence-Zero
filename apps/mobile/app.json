@@ -17,10 +17,14 @@
     "ios": {
       "bundleIdentifier": "com.thaqib.confpresencezeropoc",
       "supportsTablet": true,
+      "entitlements": {
+        "com.apple.developer.networking.wifi-info": true
+      },
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "ConfPresence ZERO uses Bluetooth Low Energy to detect in-room peer presence.",
         "NSBluetoothPeripheralUsageDescription": "ConfPresence ZERO broadcasts BLE tokens for zero-hardware presence detection.",
         "NSLocationWhenInUseUsageDescription": "ConfPresence ZERO uses location services to verify in-room Wi-Fi network fingerprints.",
+        "NSLocalNetworkUsageDescription": "ConfPresence ZERO connects to a conference presence server on your local network.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },

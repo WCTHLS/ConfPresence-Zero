@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Switch,
@@ -13,6 +12,7 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import type { ParticipantRole, RoomMemberInfo } from "@confpresence/shared";
 import { PresenceService, type PresenceStatus } from "./src/services/presenceService";
 import { getOrCreateDeviceId } from "./src/services/deviceIdentity";
@@ -178,6 +178,11 @@ export default function App() {
   }, [running, role, roomId, sessionId, serverUrl, deviceId]);
 
   const togglePresence = async (enabled: boolean) => {
+    if (enabled && !deviceId) {
+      Alert.alert("Please wait", "The device identity is still initializing.");
+      return;
+    }
+
     runningRef.current = enabled;
     setRunning(enabled);
     try {
@@ -197,6 +202,7 @@ export default function App() {
         setServerConnected(null);
       }
     } catch (error) {
+      await service.stop();
       runningRef.current = false;
       setRunning(false);
       setRoomMembers([]);
@@ -274,9 +280,10 @@ export default function App() {
   const activeRoomTitle = role === "presenter" ? roomId : detectedRoom ? detectedRoom : "Searching...";
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar style="dark" />
-      <ScrollView contentContainerStyle={styles.container}>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="dark" />
+        <ScrollView contentContainerStyle={styles.container}>
         <Text style={styles.title}>ConfPresence ZERO</Text>
         <Text style={styles.subtitle}>Zero-hardware BLE mesh POC</Text>
 
@@ -386,7 +393,11 @@ export default function App() {
             <Text style={styles.startTitle}>Share presence</Text>
             <Text style={styles.help}>The POC scans only while the app is open.</Text>
           </View>
-          <Switch value={running} onValueChange={togglePresence} />
+          <Switch
+            disabled={!deviceId || status.state === "starting"}
+            value={running}
+            onValueChange={togglePresence}
+          />
         </View>
 
         {/* Live Connected Devices & Presence Dashboard */}
@@ -615,8 +626,9 @@ export default function App() {
         <Text style={styles.note}>
           Dual-sensor POC: the app uses low-latency BLE mesh peer discovery and ambient Wi-Fi access point fingerprinting for zero-hardware in-room presence estimation.
         </Text>
-      </ScrollView>
-    </SafeAreaView>
+        </ScrollView>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 

@@ -91,7 +91,9 @@ This monorepo is managed using **pnpm workspaces**:
 │       │   └── app/src/main/java/com/confpresence/zero/
 │       │       ├── ble/ConfPresenceBleModule.kt   # Native Kotlin BLE Advertise/Scan
 │       │       └── wifi/ConfPresenceWifiModule.kt # Native Kotlin Wi-Fi Scanner
-│       ├── ios/                 # Native iOS Swift/ObjC modules
+│       ├── ios/                 # Generated Xcode project and CocoaPods configuration
+│       ├── modules/react-native-conf-presence/
+│       │   └── ios/             # Autolinked Swift/ObjC BLE and Wi-Fi bridge
 │       ├── src/
 │       │   ├── native/          # TypeScript native bridge wrappers
 │       │   └── services/        # Presence service & device identity manager
@@ -248,6 +250,36 @@ Connect your physical Android phone via USB with **USB Debugging** enabled.
 
 ---
 
+### Step 6: Build and Run the Mobile App (Physical iPhone)
+
+BLE advertising and scanning require a physical iPhone; the iOS Simulator can only validate the UI and API flow.
+
+1. Install dependencies and regenerate the iOS project if native configuration changed:
+   ```bash
+   pnpm install --frozen-lockfile
+   pnpm --filter @confpresence/mobile prebuild:ios
+   cd apps/mobile/ios && pod install && cd ../../..
+   ```
+
+2. Open `apps/mobile/ios/ConfPresenceZERO.xcworkspace` in Xcode. Select the `ConfPresenceZERO` target, choose your Apple development team under **Signing & Capabilities**, and connect a registered iPhone running iOS 15.1 or later.
+
+3. Build and launch on the connected iPhone:
+   ```bash
+   pnpm --filter @confpresence/mobile ios --device
+   ```
+
+4. Grant Bluetooth, Local Network, and Location permissions when prompted. Keep the app in the foreground during the POC session.
+
+For an EAS physical-device development build:
+```bash
+cd apps/mobile
+npx eas-cli build --platform ios --profile development
+```
+
+Use the `development-simulator` EAS profile only for UI/API testing. See [docs/IOS_NATIVE_MODULE.md](docs/IOS_NATIVE_MODULE.md) for capability details and troubleshooting.
+
+---
+
 ## 🧪 Multi-Device Testing & Verification Procedure
 
 To test full zero-hardware room presence clustering:
@@ -342,8 +374,10 @@ The repository includes a ready-to-use [`render.yaml`](file:///c:/Users/Admin/Do
 | `pnpm typecheck` | `pnpm -r typecheck` | Run TypeScript typechecking across all workspaces |
 | `pnpm --filter @confpresence/api test` | `tsx apps/api/src/test_wifi_inference.ts` | Run inference engine test suite |
 | `pnpm --filter @confpresence/mobile android` | `expo run:android` | Build and run native Android app on connected device |
+| `pnpm --filter @confpresence/mobile ios --device` | `expo run:ios --device` | Build and run native iOS app on a connected iPhone |
 | `pnpm --filter @confpresence/mobile start` | `expo start --dev-client` | Start Metro development server |
 | `pnpm --filter @confpresence/mobile prebuild` | `expo prebuild --platform android` | Regenerate native Android directories |
+| `pnpm --filter @confpresence/mobile prebuild:ios` | `expo prebuild --platform ios` | Regenerate the native iOS project and capabilities |
 
 ---
 
@@ -356,6 +390,7 @@ For in-depth architectural analyses and engineering specifications, explore the 
 - 🎯 [**POC Scope & Acceptance Criteria**](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/docs/POC_SCOPE.md): Defined constraints and success metrics.
 - 🧪 [**Test Plan & Benchmark Suite**](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/docs/TEST_PLAN.md): Multi-room and multi-phone validation protocols.
 - 🤖 [**Android BLE Native Module Guide**](file:///c:/Users/Admin/Documents/Codex/2026-08-13/referenced-chatgpt-conversation-this-is-an-2/docs/ANDROID_BLE_MODULE.md): Integration steps for Kotlin native bridge.
+- [**iOS Native Module Guide**](docs/IOS_NATIVE_MODULE.md): Physical-device builds, permissions, capabilities, and platform limits.
 
 ---
 
