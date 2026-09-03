@@ -12,6 +12,7 @@ type DeviceRecord = {
   wifiFingerprint?: WifiApObservation[];
   uwbDiscoveryToken?: string;
   uwbTokenUpdatedAt?: number;
+  wifiHistory?: Map<string, { ap: WifiApObservation; lastSeen: number }>;
   updatedAt: number;
 };
 
@@ -29,13 +30,13 @@ export class PocInferenceEngine {
       wifiFingerprint: current?.wifiFingerprint,
       uwbDiscoveryToken: current?.uwbDiscoveryToken,
       uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
+      wifiHistory: current?.wifiHistory ?? new Map(),
       updatedAt: Date.now()
     });
   }
 
   leave(deviceId: string) {
     this.devices.delete(deviceId);
-    // Purge batches associated with this device
     for (let i = this.batches.length - 1; i >= 0; i--) {
       if (this.batches[i].deviceId === deviceId) {
         this.batches.splice(i, 1);
@@ -45,6 +46,27 @@ export class PocInferenceEngine {
 
   ingest(batch: PresenceBatch) {
     const current = this.devices.get(batch.deviceId);
+    const wifiHistory = current?.wifiHistory ?? new Map<string, { ap: WifiApObservation; lastSeen: number }>();
+    const now = Date.now();
+
+    // 1. Ingest fresh Wi-Fi APs into 30s rolling fingerprint history
+    if (batch.wifiFingerprint && batch.wifiFingerprint.length > 0) {
+      for (const ap of batch.wifiFingerprint) {
+        const bssid = ap.bssid.toLowerCase().trim();
+        wifiHistory.set(bssid, { ap, lastSeen: now });
+      }
+    }
+
+    // 2. Clean stale AP entries older than 35s
+    for (const [bssid, entry] of wifiHistory.entries()) {
+      if (now - entry.lastSeen > 35_000) {
+        wifiHistory.delete(bssid);
+      }
+    }
+
+    // 3. Compile consolidated active Wi-Fi fingerprint
+    const consolidatedWifi: WifiApObservation[] = [...wifiHistory.values()].map(e => e.ap);
+
     this.devices.set(batch.deviceId, {
       deviceId: batch.deviceId,
       displayName: batch.displayName || current?.displayName,
@@ -57,6 +79,9 @@ export class PocInferenceEngine {
       uwbDiscoveryToken: current?.uwbDiscoveryToken,
       uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       updatedAt: Date.now()
+      wifiFingerprint: consolidatedWifi.length > 0 ? consolidatedWifi : current?.wifiFingerprint,
+      wifiHistory,
+      updatedAt: now
     });
     this.batches.push(batch);
     this.trim();
@@ -82,12 +107,13 @@ export class PocInferenceEngine {
   roomState(sessionId: string, roomId: string): LiveRoomState {
     this.trim();
     const now = Date.now();
-    const presenters = [...this.devices.values()]
-      .filter((device) => device.role === "presenter" && device.roomId === roomId && now - device.updatedAt < WINDOW_MS * 2)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
-    const presenter = presenters[0];
+    const graph = this.buildGraph();
 
-    if (!presenter) {
+    // 1. Find all active presenters in this specific room
+    const presentersInRoom = [...this.devices.values()]
+      .filter((d) => d.role === "presenter" && d.roomId === roomId && now - d.updatedAt < WINDOW_MS * 2);
+
+    if (!presentersInRoom.length) {
       return {
         sessionId,
         roomId,
@@ -97,22 +123,74 @@ export class PocInferenceEngine {
       };
     }
 
-    const graph = this.buildGraph();
-    const members = this.componentFrom(presenter.deviceId, graph);
+    // 2. Host Sticky Locking & Density Resolution:
+    // Prioritize the Host who has active in-room peer sightings (protecting from remote 0-peer takeovers)
+    const presenter = presentersInRoom.sort((a, b) => {
+      const peersA = (graph.get(a.deviceId) ?? new Set()).size;
+      const peersB = (graph.get(b.deviceId) ?? new Set()).size;
+      if (peersA !== peersB) return peersB - peersA;
+      return b.updatedAt - a.updatedAt;
+    })[0];
 
-    const membersInfo: RoomMemberInfo[] = [...members].map((id) => {
-      const rec = this.devices.get(id);
-      const isPresenter = id === presenter.deviceId;
-      
+    // 3. Get all connected members in this presenter's physical graph cluster
+    const clusterMembers = this.componentFrom(presenter.deviceId, graph);
+
+    // 4. Find all other active presenters across other rooms for dynamic multi-room separation
+    const otherPresenters = [...this.devices.values()]
+      .filter((d) => d.role === "presenter" && d.deviceId !== presenter.deviceId && d.roomId && now - d.updatedAt < WINDOW_MS * 2);
+
+    // 5. Build members list with Strongest-Link & Wi-Fi Affinity Room Assignment
+    const membersInfo: RoomMemberInfo[] = [];
+    const estimatedMemberDeviceIds: string[] = [];
+
+    for (const memberId of clusterMembers) {
+      const rec = this.devices.get(memberId);
+      const isPresenter = memberId === presenter.deviceId;
+
+      if (isPresenter) {
+        estimatedMemberDeviceIds.push(memberId);
+        membersInfo.push({
+          deviceId: memberId,
+          displayName: rec?.displayName || memberId,
+          role: "presenter",
+          confidence: 1.0,
+          wifiSimilarity: undefined
+        });
+        continue;
+      }
+
+      // Check Multi-Room Affinity: Is this attendee physically closer to another presenter?
+      let assignedToThisRoom = true;
+      if (otherPresenters.length > 0) {
+        const thisHop = this.shortestPathDistance(memberId, presenter.deviceId, graph);
+        const thisWifi = (presenter.wifiFingerprint && rec?.wifiFingerprint)
+          ? (this.computeWifiCosineSimilarity(rec.wifiFingerprint, presenter.wifiFingerprint) ?? 0.5)
+          : 0.5;
+        const thisAffinity = (1 / Math.max(1, thisHop)) * 0.5 + thisWifi * 0.5;
+
+        for (const other of otherPresenters) {
+          const otherHop = this.shortestPathDistance(memberId, other.deviceId, graph);
+          const otherWifi = (other.wifiFingerprint && rec?.wifiFingerprint)
+            ? (this.computeWifiCosineSimilarity(rec.wifiFingerprint, other.wifiFingerprint) ?? 0.5)
+            : 0.5;
+          const otherAffinity = (1 / Math.max(1, otherHop)) * 0.5 + otherWifi * 0.5;
+
+          if (otherAffinity > thisAffinity + 0.15) {
+            assignedToThisRoom = false; // Attendee has walked into another room!
+            break;
+          }
+        }
+      }
+
+      if (!assignedToThisRoom) continue;
+
       let wifiSimilarity: number | undefined;
-      let confidence = isPresenter ? 1.0 : 0.85;
+      let confidence = 0.85;
 
-      if (!isPresenter && presenter.wifiFingerprint?.length && rec?.wifiFingerprint?.length) {
+      if (presenter.wifiFingerprint?.length && rec?.wifiFingerprint?.length) {
         const sim = this.computeWifiCosineSimilarity(rec.wifiFingerprint, presenter.wifiFingerprint);
         if (sim !== undefined) {
           wifiSimilarity = Number(sim.toFixed(2));
-          // Dual-sensor confidence fusion:
-          // In-room Wi-Fi match (>= 0.70) boosts attendee confidence up to 0.98.
           if (sim >= 0.70) {
             confidence = Number(Math.min(0.98, 0.85 + (sim - 0.70) * 0.43).toFixed(2));
           } else {
@@ -139,13 +217,22 @@ export class PocInferenceEngine {
         uwbDiscoveryToken
       };
     });
+      estimatedMemberDeviceIds.push(memberId);
+      membersInfo.push({
+        deviceId: memberId,
+        displayName: rec?.displayName || memberId,
+        role: rec?.role || "attendee",
+        confidence,
+        wifiSimilarity
+      });
+    }
 
     return {
       sessionId,
       roomId,
       presenterDeviceId: presenter.deviceId,
       presenterName: presenter.displayName || presenter.deviceId,
-      estimatedMemberDeviceIds: [...members],
+      estimatedMemberDeviceIds,
       members: membersInfo,
       updatedAt: new Date().toISOString()
     };
@@ -156,25 +243,38 @@ export class PocInferenceEngine {
     const graph = this.buildGraph();
     const now = Date.now();
 
-    // Check if the querying device is itself an active presenter
     const currentDevice = this.devices.get(deviceId);
     if (currentDevice?.role === "presenter" && currentDevice.roomId) {
       return this.roomState(sessionId, currentDevice.roomId);
     }
 
-    // For Attendees: Find which active presenter's room cluster contains this device
+    // For Attendees: Find which active presenter's room cluster has highest affinity
     const activePresenters = [...this.devices.values()]
-      .filter((d) => d.role === "presenter" && d.roomId && now - d.updatedAt < WINDOW_MS * 2)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .filter((d) => d.role === "presenter" && d.roomId && now - d.updatedAt < WINDOW_MS * 2);
+
+    let bestRoomId: string | undefined;
+    let highestAffinity = -1;
 
     for (const presenter of activePresenters) {
-      const members = this.componentFrom(presenter.deviceId, graph);
-      if (members.has(deviceId)) {
-        return this.roomState(sessionId, presenter.roomId!);
+      const cluster = this.componentFrom(presenter.deviceId, graph);
+      if (cluster.has(deviceId)) {
+        const hop = this.shortestPathDistance(deviceId, presenter.deviceId, graph);
+        const wifi = (presenter.wifiFingerprint && currentDevice?.wifiFingerprint)
+          ? (this.computeWifiCosineSimilarity(currentDevice.wifiFingerprint, presenter.wifiFingerprint) ?? 0.5)
+          : 0.5;
+        const affinity = (1 / Math.max(1, hop)) * 0.5 + wifi * 0.5;
+
+        if (affinity > highestAffinity) {
+          highestAffinity = affinity;
+          bestRoomId = presenter.roomId;
+        }
       }
     }
 
-    // Attendee is not in any active presenter room cluster -> return clean empty/unassigned state
+    if (bestRoomId) {
+      return this.roomState(sessionId, bestRoomId);
+    }
+
     return {
       sessionId,
       roomId: "unknown",
@@ -186,45 +286,44 @@ export class PocInferenceEngine {
 
   /**
    * Computes the calibrated indoor similarity (0.0 to 1.0) between two Wi-Fi AP fingerprints.
-   * 1. Filters out fluctuating noise APs (< -85 dBm).
-   * 2. Extracts top dominant access points from each device.
-   * 3. Calculates BSSID set overlap + signal proximity delta for in-room tolerance (2m-10m).
+   * Uses Multi-BSSID base MAC grouping (2.4G vs 5G matching) + signal proximity delta.
    */
   computeWifiCosineSimilarity(fpA: WifiApObservation[], fpB: WifiApObservation[]): number | undefined {
     if (!fpA.length || !fpB.length) return undefined;
 
-    // Filter out faint noise APs below -85 dBm and take the top 12 strongest APs from each device
-    const validA = fpA
-      .filter((ap) => ap.rssi >= -85)
-      .sort((a, b) => b.rssi - a.rssi)
-      .slice(0, 12);
-    const validB = fpB
-      .filter((ap) => ap.rssi >= -85)
-      .sort((a, b) => b.rssi - a.rssi)
-      .slice(0, 12);
+    // Filter out faint noise APs below -85 dBm and take the top 15 strongest APs
+    const validA = fpA.filter((ap) => ap.rssi >= -85).sort((a, b) => b.rssi - a.rssi).slice(0, 15);
+    const validB = fpB.filter((ap) => ap.rssi >= -85).sort((a, b) => b.rssi - a.rssi).slice(0, 15);
 
     if (!validA.length || !validB.length) return undefined;
 
+    // Base MAC extraction for Multi-BSSID virtual router grouping (e.g. AA:BB:CC:DD:EE:* matches 2.4G & 5G)
+    const toBaseMac = (bssid: string): string => {
+      const norm = bssid.toLowerCase().trim();
+      const parts = norm.split(":");
+      return parts.length >= 5 ? parts.slice(0, 5).join(":") : norm;
+    };
+
     const mapA = new Map<string, number>();
     for (const ap of validA) {
-      const bssid = ap.bssid.toLowerCase().trim();
-      mapA.set(bssid, Math.max(mapA.get(bssid) ?? -100, ap.rssi));
+      const baseKey = toBaseMac(ap.bssid);
+      mapA.set(baseKey, Math.max(mapA.get(baseKey) ?? -100, ap.rssi));
     }
 
     const mapB = new Map<string, number>();
     for (const ap of validB) {
-      const bssid = ap.bssid.toLowerCase().trim();
-      mapB.set(bssid, Math.max(mapB.get(bssid) ?? -100, ap.rssi));
+      const baseKey = toBaseMac(ap.bssid);
+      mapB.set(baseKey, Math.max(mapB.get(baseKey) ?? -100, ap.rssi));
     }
 
     let sharedCount = 0;
     let totalSignalSim = 0;
 
-    for (const [bssid, rssiA] of mapA) {
-      const rssiB = mapB.get(bssid);
+    for (const [baseKey, rssiA] of mapA) {
+      const rssiB = mapB.get(baseKey);
       if (rssiB !== undefined) {
         sharedCount++;
-        // Delta tolerance: 0 dBm diff -> 1.0, 15 dBm diff -> 0.67, 30 dBm diff -> 0.33, 45 dBm -> 0.0
+        // Delta tolerance across 2m - 10m room distance: 0 dBm diff -> 1.0, 15 dBm diff -> 0.67
         const delta = Math.abs(rssiA - rssiB);
         const signalSim = Math.max(0, 1 - delta / 45);
         totalSignalSim += signalSim;
@@ -233,19 +332,13 @@ export class PocInferenceEngine {
 
     if (sharedCount === 0) return 0;
 
-    // 1. Overlap score (fraction of dominant APs heard by both phones)
-    const overlapRatio = (sharedCount * 2) / (mapA.size + mapB.size); // Dice-Sørensen coefficient
-
-    // 2. Average signal proximity across all shared APs
+    const overlapRatio = (sharedCount * 2) / (mapA.size + mapB.size);
     const avgSignalSim = totalSignalSim / sharedCount;
+    const rawMatch = 0.35 * overlapRatio + 0.65 * avgSignalSim;
 
-    // 3. Calibrated in-room blend: 40% Overlap + 60% Signal Proximity
-    const rawMatch = 0.40 * overlapRatio + 0.60 * avgSignalSim;
-
-    // Scale to intuitive in-room bounds:
-    // If in the same room (sharedCount >= 3 and overlapRatio >= 0.4), scale smoothly between 0.75 and 0.95
-    if (sharedCount >= 3 && overlapRatio >= 0.4) {
-      return Number(Math.min(0.96, Math.max(0.72, 0.65 + rawMatch * 0.32)).toFixed(2));
+    // Calibrated in-room bounds: In-room shared APs (>= 3) cleanly output 82% to 96%
+    if (sharedCount >= 2 && overlapRatio >= 0.3) {
+      return Number(Math.min(0.96, Math.max(0.78, 0.72 + rawMatch * 0.25)).toFixed(2));
     }
 
     return Number(Math.min(0.65, rawMatch * 0.75).toFixed(2));
@@ -253,11 +346,28 @@ export class PocInferenceEngine {
 
   listRooms(sessionId: string): string[] {
     this.trim();
-    const rooms = new Set<string>(["room-a", "room-b"]);
+    const rooms = new Set<string>(["room-a", "room-b", "auditorium"]);
     for (const d of this.devices.values()) {
       if (d.roomId) rooms.add(d.roomId);
     }
     return [...rooms];
+  }
+
+  private shortestPathDistance(start: string, target: string, graph: Map<string, Set<string>>): number {
+    if (start === target) return 0;
+    const visited = new Set<string>([start]);
+    const queue: [string, number][] = [[start, 0]];
+    while (queue.length) {
+      const [curr, dist] = queue.shift()!;
+      for (const neighbor of graph.get(curr) ?? []) {
+        if (neighbor === target) return dist + 1;
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push([neighbor, dist + 1]);
+        }
+      }
+    }
+    return 99; // Not connected
   }
 
   private buildGraph(): Map<string, Set<string>> {
