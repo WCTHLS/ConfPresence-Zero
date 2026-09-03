@@ -80,14 +80,10 @@ app.post("/api/session/leave", (request, response) => {
 app.post("/api/uwb/token", (request, response) => {
   const parsed = uwbTokenSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
-<<<<<<< HEAD
-  engine.setUwbToken(parsed.data.deviceId, parsed.data.discoveryTokenBase64);
-=======
   
   engine.setUwbToken(parsed.data.deviceId, parsed.data.discoveryTokenBase64);
   console.log(`📡 [UWB] Discovery token registered for device ${parsed.data.deviceId}`);
   
->>>>>>> 7f882fa (Cleanly merge UWB token relay with multi-room presence and sensor calibration algorithms)
   return response.status(202).json({ ok: true });
 });
 
