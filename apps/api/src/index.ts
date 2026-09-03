@@ -22,6 +22,11 @@ const leaveSchema = z.object({
   deviceId: z.string().min(8)
 });
 
+const uwbTokenSchema = z.object({
+  deviceId: z.string().min(8),
+  discoveryTokenBase64: z.string().min(1)
+});
+
 const wifiApSchema = z.object({
   bssid: z.string().min(1),
   ssid: z.string().optional(),
@@ -72,6 +77,13 @@ app.post("/api/session/leave", (request, response) => {
   return response.json({ ok: true });
 });
 
+app.post("/api/uwb/token", (request, response) => {
+  const parsed = uwbTokenSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
+  engine.setUwbToken(parsed.data.deviceId, parsed.data.discoveryTokenBase64);
+  return response.status(202).json({ ok: true });
+});
+
 app.post("/api/observations", (request, response) => {
   const parsed = batchSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ error: parsed.error.flatten() });
@@ -99,7 +111,7 @@ app.get("/api/rooms/:roomId/live", (request, response) => {
   
   // Throttle periodic room state summary logging to once every 15s to keep console clean
   const now = Date.now();
-  if (now - lastLogTime > 15_000 && state.members.length > 0) {
+  if (now - lastLogTime > 15_000 && state.members && state.members.length > 0) {
     lastLogTime = now;
     const names = state.members.map((m: { displayName?: string; deviceId: string }) => m.displayName || m.deviceId.slice(-6)).join(", ");
     console.log(`📊 [ROOM '${request.params.roomId}'] ${state.members.length} Confirmed In-Room: [${names}]`);
