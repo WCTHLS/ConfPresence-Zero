@@ -34,12 +34,18 @@ export interface JoinSessionRequest {
   roomId?: string;
 }
 
+export interface UwbTokenRequest {
+  deviceId: string;
+  discoveryTokenBase64: string;
+}
+
 export interface RoomMemberInfo {
   deviceId: string;
   displayName: string;
   role: ParticipantRole;
   confidence?: number;
   wifiSimilarity?: number;
+  uwbDiscoveryToken?: string;
 }
 
 export interface LiveRoomState {

@@ -10,6 +10,8 @@ type DeviceRecord = {
   roomId?: string;
   rotatingId?: string;
   wifiFingerprint?: WifiApObservation[];
+  uwbDiscoveryToken?: string;
+  uwbTokenUpdatedAt?: number;
   wifiHistory?: Map<string, { ap: WifiApObservation; lastSeen: number }>;
   updatedAt: number;
 };
@@ -26,6 +28,8 @@ export class PocInferenceEngine {
       role,
       roomId,
       wifiFingerprint: current?.wifiFingerprint,
+      uwbDiscoveryToken: current?.uwbDiscoveryToken,
+      uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       wifiHistory: current?.wifiHistory ?? new Map(),
       updatedAt: Date.now()
     });
@@ -69,12 +73,35 @@ export class PocInferenceEngine {
       role: batch.role,
       roomId: batch.roomId ?? current?.roomId,
       rotatingId: batch.rotatingId,
+      wifiFingerprint: batch.wifiFingerprint && batch.wifiFingerprint.length > 0
+        ? batch.wifiFingerprint
+        : current?.wifiFingerprint,
+      uwbDiscoveryToken: current?.uwbDiscoveryToken,
+      uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
+      updatedAt: Date.now()
       wifiFingerprint: consolidatedWifi.length > 0 ? consolidatedWifi : current?.wifiFingerprint,
       wifiHistory,
       updatedAt: now
     });
     this.batches.push(batch);
     this.trim();
+  }
+
+  // Keyed by the stable deviceId, not the rotating BLE token, since UWB
+  // ranging sessions shouldn't need re-negotiating every rotation cycle.
+  setUwbToken(deviceId: string, discoveryTokenBase64: string) {
+    const current = this.devices.get(deviceId);
+    this.devices.set(deviceId, {
+      deviceId,
+      displayName: current?.displayName,
+      role: current?.role ?? "attendee",
+      roomId: current?.roomId,
+      rotatingId: current?.rotatingId,
+      wifiFingerprint: current?.wifiFingerprint,
+      uwbDiscoveryToken: discoveryTokenBase64,
+      uwbTokenUpdatedAt: Date.now(),
+      updatedAt: Date.now()
+    });
   }
 
   roomState(sessionId: string, roomId: string): LiveRoomState {
@@ -172,6 +199,24 @@ export class PocInferenceEngine {
         }
       }
 
+      // Only surface a token while it's fresh enough that the peer is likely
+      // still holding an active NISession for it (mirrors the "active" room
+      // membership window, which is tighter than the 3x grace period devices
+      // get before being evicted entirely).
+      const uwbDiscoveryToken =
+        rec?.uwbDiscoveryToken && rec.uwbTokenUpdatedAt !== undefined && now - rec.uwbTokenUpdatedAt < WINDOW_MS
+          ? rec.uwbDiscoveryToken
+          : undefined;
+
+      return {
+        deviceId: id,
+        displayName: rec?.displayName || id,
+        role: rec?.role || (isPresenter ? "presenter" : "attendee"),
+        confidence,
+        wifiSimilarity,
+        uwbDiscoveryToken
+      };
+    });
       estimatedMemberDeviceIds.push(memberId);
       membersInfo.push({
         deviceId: memberId,
