@@ -1,4 +1,4 @@
-﻿import { PermissionsAndroid, Platform } from "react-native";
+import { PermissionsAndroid, Platform } from "react-native";
 import type { ParticipantRole, WifiApObservation } from "@confpresence/shared";
 import { createRotatingId } from "./deviceIdentity";
 import { requireBleModule, subscribeToPeers, type NativePeer } from "../native/confPresenceBle";
@@ -183,6 +183,17 @@ export class PresenceService {
     }
     const wifiFingerprint = rawWifi.length >= 3 ? rawWifi : this.lastKnownWifiFingerprint;
     this.lastWifiApCount = wifiFingerprint.length;
+
+    // Native BLE Scanner Keep-Alive Watchdog:
+    // If running and 0 peers heard in this tick, pulse the native scanner to prevent OEM sleep
+    if (this.peers.size === 0) {
+      try {
+        const ble = requireBleModule();
+        await ble.startScanning();
+      } catch {
+        // Ignore keep-alive errors
+      }
+    }
 
     const body = {
       ...this.config,

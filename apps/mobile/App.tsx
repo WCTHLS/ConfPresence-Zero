@@ -232,7 +232,7 @@ export default function App() {
             setServerConnected(true);
             setServerHealth("online");
             setIsAutoDetecting(false);
-            Alert.alert("Local Server Discovered! 💻", `Connected to laptop API server at:\n${base}`);
+            Alert.alert("Local Server Discovered! ðŸ’»", `Connected to laptop API server at:\n${base}`);
             return;
           }
         }
@@ -344,7 +344,7 @@ export default function App() {
                         style={styles.roomDeleteIcon}
                         onPress={() => handleRemoveRoom(r)}
                       >
-                        <Text style={[styles.roomDeleteText, isSelected && styles.roomDeleteTextSelected]}>✕</Text>
+                        <Text style={[styles.roomDeleteText, isSelected && styles.roomDeleteTextSelected]}>âœ•</Text>
                       </TouchableOpacity>
                     )}
                   </TouchableOpacity>
@@ -398,7 +398,7 @@ export default function App() {
               onPress={() => fetchLiveRoom()}
               activeOpacity={0.7}
             >
-              <Text style={styles.refreshButtonText}>🔄 Refresh</Text>
+              <Text style={styles.refreshButtonText}>ðŸ”„ Refresh</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.statsGrid}>
@@ -461,13 +461,13 @@ export default function App() {
 
                     {/* Sensor Metrics Row: Confidence & Wi-Fi Match */}
                     <View style={styles.tableRowMetrics}>
-                      <Text style={styles.confText}>🎯 {confPct}% Conf</Text>
+                      <Text style={styles.confText}>ðŸŽ¯ {confPct}% Conf</Text>
                       {isHost ? (
-                        <Text style={styles.wifiMatchText}>📶 Wi-Fi Anchor</Text>
+                        <Text style={styles.wifiMatchText}>ðŸ“¶ Wi-Fi Anchor</Text>
                       ) : wifiPct != null ? (
-                        <Text style={styles.wifiMatchText}>📶 Wi-Fi: {wifiPct}% match</Text>
+                        <Text style={styles.wifiMatchText}>ðŸ“¶ Wi-Fi: {wifiPct}% match</Text>
                       ) : (
-                        <Text style={styles.bleMeshText}>📡 BLE Proximity</Text>
+                        <Text style={styles.bleMeshText}>ðŸ“¡ BLE Proximity</Text>
                       )}
                     </View>
                   </View>
@@ -502,13 +502,13 @@ export default function App() {
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
               <Text style={styles.serverHeaderText}>
-                ⚙️ {serverEnv === "cloud" ? "☁️ Cloud Server (Default)" : serverEnv === "local" ? "💻 Local Laptop" : "✏️ Custom Server"}
+                âš™ï¸ {serverEnv === "cloud" ? "â˜ï¸ Cloud Server (Default)" : serverEnv === "local" ? "ðŸ’» Local Laptop" : "âœï¸ Custom Server"}
               </Text>
-              {serverHealth === "online" && <Text style={{ fontSize: 11, color: "#2E7D32", fontWeight: "700" }}>🟢 Online</Text>}
-              {serverHealth === "offline" && <Text style={{ fontSize: 11, color: "#C62828", fontWeight: "700" }}>🔴 Offline</Text>}
-              {serverHealth === "checking" && <Text style={{ fontSize: 11, color: "#E65100", fontWeight: "600" }}>⏳</Text>}
+              {serverHealth === "online" && <Text style={{ fontSize: 11, color: "#2E7D32", fontWeight: "700" }}>ðŸŸ¢ Online</Text>}
+              {serverHealth === "offline" && <Text style={{ fontSize: 11, color: "#C62828", fontWeight: "700" }}>ðŸ”´ Offline</Text>}
+              {serverHealth === "checking" && <Text style={{ fontSize: 11, color: "#E65100", fontWeight: "600" }}>â³</Text>}
             </View>
-            <Text style={styles.serverToggleText}>{showServerConfig ? "▲ Hide" : "▼ Change"}</Text>
+            <Text style={styles.serverToggleText}>{showServerConfig ? "â–² Hide" : "â–¼ Change"}</Text>
           </TouchableOpacity>
 
           {/* Collapsible Environment Switcher & Auto-Detection */}
@@ -528,7 +528,7 @@ export default function App() {
                   }}
                 >
                   <Text style={[styles.envChipText, serverEnv === "cloud" && styles.envChipTextSelected]}>
-                    ☁️ Cloud (Default)
+                    â˜ï¸ Cloud (Default)
                   </Text>
                 </TouchableOpacity>
 
@@ -542,7 +542,7 @@ export default function App() {
                   }}
                 >
                   <Text style={[styles.envChipText, serverEnv === "local" && styles.envChipTextSelected]}>
-                    💻 Local Laptop
+                    ðŸ’» Local Laptop
                   </Text>
                 </TouchableOpacity>
 
@@ -552,7 +552,7 @@ export default function App() {
                   onPress={() => setServerEnv("custom")}
                 >
                   <Text style={[styles.envChipText, serverEnv === "custom" && styles.envChipTextSelected]}>
-                    ✏️ Custom
+                    âœï¸ Custom
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -575,10 +575,10 @@ export default function App() {
               <View style={styles.serverStatusBanner}>
                 <Text style={styles.serverStatusBannerText}>
                   {serverHealth === "online"
-                    ? "🟢 Connected & Ready for Presence Tracking"
+                    ? "ðŸŸ¢ Connected & Ready for Presence Tracking"
                     : serverHealth === "offline"
-                    ? "🔴 Server unreachable. Check Wi-Fi or backend server."
-                    : "⏳ Checking connection..."}
+                    ? "ðŸ”´ Server unreachable. Check Wi-Fi or backend server."
+                    : "â³ Checking connection..."}
                 </Text>
               </View>
 
@@ -592,7 +592,7 @@ export default function App() {
                     checkHealth(CLOUD_API_URL);
                   }}
                 >
-                  <Text style={styles.switchCloudBtnText}>☁️ Switch Back to Cloud (Recommended)</Text>
+                  <Text style={styles.switchCloudBtnText}>â˜ï¸ Switch Back to Cloud (Recommended)</Text>
                 </TouchableOpacity>
               )}
 
@@ -604,7 +604,7 @@ export default function App() {
                   onPress={autoDetectServerIP}
                 >
                   <Text style={styles.autoDetectBtnText}>
-                    {isAutoDetecting ? "🔍 Scanning Local Subnet..." : "🔍 Auto-Detect Local Laptop IP"}
+                    {isAutoDetecting ? "ðŸ” Scanning Local Subnet..." : "ðŸ” Auto-Detect Local Laptop IP"}
                   </Text>
                 </TouchableOpacity>
               )}
