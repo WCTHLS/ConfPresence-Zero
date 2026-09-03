@@ -44,6 +44,22 @@ export class PocInferenceEngine {
     }
   }
 
+  setUwbToken(deviceId: string, discoveryTokenBase64: string) {
+    const current = this.devices.get(deviceId);
+    this.devices.set(deviceId, {
+      deviceId,
+      displayName: current?.displayName,
+      role: current?.role ?? "attendee",
+      roomId: current?.roomId,
+      rotatingId: current?.rotatingId,
+      wifiFingerprint: current?.wifiFingerprint,
+      uwbDiscoveryToken: discoveryTokenBase64,
+      uwbTokenUpdatedAt: Date.now(),
+      wifiHistory: current?.wifiHistory ?? new Map(),
+      updatedAt: Date.now()
+    });
+  }
+
   ingest(batch: PresenceBatch) {
     const current = this.devices.get(batch.deviceId);
     const wifiHistory = current?.wifiHistory ?? new Map<string, { ap: WifiApObservation; lastSeen: number }>();
@@ -80,6 +96,8 @@ export class PocInferenceEngine {
       uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       updatedAt: Date.now()
       wifiFingerprint: consolidatedWifi.length > 0 ? consolidatedWifi : current?.wifiFingerprint,
+      uwbDiscoveryToken: current?.uwbDiscoveryToken,
+      uwbTokenUpdatedAt: current?.uwbTokenUpdatedAt,
       wifiHistory,
       updatedAt: now
     });
@@ -147,6 +165,11 @@ export class PocInferenceEngine {
       const rec = this.devices.get(memberId);
       const isPresenter = memberId === presenter.deviceId;
 
+      const uwbDiscoveryToken =
+        rec?.uwbDiscoveryToken && rec.uwbTokenUpdatedAt !== undefined && now - rec.uwbTokenUpdatedAt < WINDOW_MS
+          ? rec.uwbDiscoveryToken
+          : undefined;
+
       if (isPresenter) {
         estimatedMemberDeviceIds.push(memberId);
         membersInfo.push({
@@ -154,7 +177,8 @@ export class PocInferenceEngine {
           displayName: rec?.displayName || memberId,
           role: "presenter",
           confidence: 1.0,
-          wifiSimilarity: undefined
+          wifiSimilarity: undefined,
+          uwbDiscoveryToken
         });
         continue;
       }
@@ -223,7 +247,8 @@ export class PocInferenceEngine {
         displayName: rec?.displayName || memberId,
         role: rec?.role || "attendee",
         confidence,
-        wifiSimilarity
+        wifiSimilarity,
+        uwbDiscoveryToken
       });
     }
 
