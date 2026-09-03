@@ -1,5 +1,5 @@
 ﻿import { PermissionsAndroid, Platform } from "react-native";
-import type { ParticipantRole } from "@confpresence/shared";
+import type { ParticipantRole, WifiApObservation } from "@confpresence/shared";
 import { createRotatingId } from "./deviceIdentity";
 import { requireBleModule, subscribeToPeers, type NativePeer } from "../native/confPresenceBle";
 import { getWifiFingerprint } from "../native/confPresenceWifi";
@@ -65,12 +65,14 @@ export class PresenceService {
   private rotatingId?: string;
   private isAdvertising = false;
   private lastWifiApCount = 0;
+  private lastKnownWifiFingerprint: WifiApObservation[] = [];
 
   constructor(private readonly onStatus: (status: PresenceStatus) => void) {}
 
   async start(config: StartConfig) {
     this.config = config;
     this.lastWifiApCount = 0;
+    this.lastKnownWifiFingerprint = [];
     this.peers.clear();
     this.activePeerCache.clear();
     this.isAdvertising = false;
@@ -100,6 +102,7 @@ export class PresenceService {
     this.activePeerCache.clear();
     this.isAdvertising = false;
     this.lastWifiApCount = 0;
+    this.lastKnownWifiFingerprint = [];
 
     if (this.config) {
       this.leaveSession(this.config).catch(() => {});
@@ -115,22 +118,27 @@ export class PresenceService {
   }
 
   private cleanExpiredPeers(now: number = Date.now()) {
-    // Keep peer count smooth across 90s sliding window
+    // Sliding 45s window for accurate real-time external peer counting
     for (const [key, item] of this.activePeerCache.entries()) {
-      if (now - item.lastSeenAt > 90_000) {
+      if (now - item.lastSeenAt > 45_000) {
         this.activePeerCache.delete(key);
       }
     }
   }
 
   private onPeer(peer: NativePeer) {
+    if (!peer.rotatingId) return;
+
+    // Self-packet rejection (Filter out BLE loopback from own phone)
+    const myPrefix = this.config?.deviceId ? this.config.deviceId.slice(-8).toLowerCase() : "";
+    const peerPrefix = peer.rotatingId.split("-")[0].toLowerCase();
+    if (myPrefix && peerPrefix === myPrefix) return;
     if (this.rotatingId && peer.rotatingId === this.rotatingId) return;
-    const devicePrefix = peer.rotatingId.split("-")[0];
-    if (!devicePrefix) return;
+    if (!peerPrefix) return;
 
     const now = Date.now();
-    this.peers.set(devicePrefix, peer);
-    this.activePeerCache.set(devicePrefix, { peer, lastSeenAt: now });
+    this.peers.set(peerPrefix, peer);
+    this.activePeerCache.set(peerPrefix, { peer, lastSeenAt: now });
     this.cleanExpiredPeers(now);
 
     this.onStatus({
@@ -167,7 +175,13 @@ export class PresenceService {
   private async flushAndRotate() {
     if (!this.config || !this.rotatingId) return;
     const targetUrl = this.config.apiUrl || DEFAULT_API_URL;
-    const wifiFingerprint = await getWifiFingerprint().catch(() => []);
+    
+    // High-watermark fallback: If Android scan throttle returns < 3 APs, fallback to latest full scan
+    const rawWifi = await getWifiFingerprint().catch(() => [] as WifiApObservation[]);
+    if (rawWifi.length >= 3) {
+      this.lastKnownWifiFingerprint = rawWifi;
+    }
+    const wifiFingerprint = rawWifi.length >= 3 ? rawWifi : this.lastKnownWifiFingerprint;
     this.lastWifiApCount = wifiFingerprint.length;
 
     const body = {
