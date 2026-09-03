@@ -1,4 +1,4 @@
-﻿export type ParticipantRole = "presenter" | "attendee";
+export type ParticipantRole = "presenter" | "attendee";
 
 export interface PeerObservation {
   rotatingId: string;

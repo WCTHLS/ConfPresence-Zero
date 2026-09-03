@@ -1,4 +1,4 @@
-﻿import cors from "cors";
+import cors from "cors";
 import express from "express";
 import { z } from "zod";
 import { PocInferenceEngine } from "./inference.js";

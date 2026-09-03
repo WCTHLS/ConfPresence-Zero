@@ -1,4 +1,4 @@
-﻿import type { LiveRoomState, PresenceBatch, RoomMemberInfo, WifiApObservation } from "@confpresence/shared";
+import type { LiveRoomState, PresenceBatch, RoomMemberInfo, WifiApObservation } from "@confpresence/shared";
 
 const WINDOW_MS = 30_000; // 30 seconds sliding active window
 const MIN_RSSI = -85;     // 20+ meters coverage in open line-of-sight halls
