@@ -16,6 +16,8 @@ import {
 import type { ParticipantRole, RoomMemberInfo } from "@confpresence/shared";
 import { PresenceService, type PresenceStatus } from "./src/services/presenceService";
 import { getOrCreateDeviceId } from "./src/services/deviceIdentity";
+import { AppLogger } from "./src/services/appLogger";
+import { LogsModal } from "./src/components/LogsModal";
 
 const DEFAULT_SESSION = "poc-session";
 const DEFAULT_ROOMS = ["room-a", "room-b", "auditorium"];
@@ -43,6 +45,14 @@ export default function App() {
   const [roomMembers, setRoomMembers] = useState<RoomMemberInfo[]>([]);
   const [serverConnected, setServerConnected] = useState<boolean | null>(null);
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [logCount, setLogCount] = useState(0);
+
+  useEffect(() => {
+    return AppLogger.subscribe((logs) => {
+      setLogCount(logs.length);
+    });
+  }, []);
 
   const service = useMemo(() => new PresenceService(setStatus), []);
 
@@ -616,6 +626,19 @@ export default function App() {
           Dual-sensor POC: the app uses low-latency BLE mesh peer discovery and ambient Wi-Fi access point fingerprinting for zero-hardware in-room presence estimation.
         </Text>
       </ScrollView>
+
+      {/* Floating Diagnostics Log Button */}
+      <TouchableOpacity
+        style={styles.floatingLogBtn}
+        onPress={() => setShowLogs(true)}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.floatingLogIcon}>📜</Text>
+        <Text style={styles.floatingLogText}>Logs {logCount > 0 ? `(${logCount})` : ""}</Text>
+      </TouchableOpacity>
+
+      {/* Diagnostics Logs Modal Popup */}
+      <LogsModal visible={showLogs} onClose={() => setShowLogs(false)} />
     </SafeAreaView>
   );
 }
@@ -876,7 +899,35 @@ const styles = StyleSheet.create({
     fontWeight: "700"
   },
 
-  note: { marginTop: 6, fontSize: 12, lineHeight: 17, color: "#5D6873" }
+  note: { marginTop: 6, fontSize: 12, lineHeight: 17, color: "#5D6873" },
+  // Floating Diagnostics Button
+  floatingLogBtn: {
+    position: "absolute",
+    bottom: 20,
+    right: 18,
+    backgroundColor: "#161B22",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: "#00E5FF",
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5
+  },
+  floatingLogIcon: {
+    fontSize: 14
+  },
+  floatingLogText: {
+    color: "#F0F6FC",
+    fontSize: 12,
+    fontWeight: "800"
+  }
 });
 
 registerRootComponent(App);

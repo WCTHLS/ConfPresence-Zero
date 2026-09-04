@@ -3,6 +3,7 @@ import type { ParticipantRole, WifiApObservation } from "@confpresence/shared";
 import { createRotatingId } from "./deviceIdentity";
 import { requireBleModule, subscribeToPeers, type NativePeer } from "../native/confPresenceBle";
 import { getWifiFingerprint } from "../native/confPresenceWifi";
+import { AppLogger } from "./appLogger";
 
 const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://confpresence-api.onrender.com";
 const BATCH_INTERVAL_MS = 10_000;
@@ -18,11 +19,15 @@ async function requestBlePermissions(): Promise<boolean> {
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
       ]);
-      return (
+      const granted = (
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED &&
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE] === PermissionsAndroid.RESULTS.GRANTED &&
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED
       );
+      if (!granted) {
+        AppLogger.log("WARN", "Android 12+ Bluetooth / Location permissions missing", "warn");
+      }
+      return granted;
     } else {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
@@ -34,7 +39,8 @@ async function requestBlePermissions(): Promise<boolean> {
       );
       return granted === PermissionsAndroid.RESULTS.GRANTED;
     }
-  } catch {
+  } catch (err: any) {
+    AppLogger.log("ERROR", `Permission request failed: ${err?.message || err}`, "error");
     return false;
   }
 }
@@ -77,23 +83,31 @@ export class PresenceService {
     this.activePeerCache.clear();
     this.isAdvertising = false;
     this.onStatus({ state: "starting", peerCount: 0, wifiApCount: 0 });
+    AppLogger.log("INFO", `Starting presence service as ${config.role.toUpperCase()} (Device: ${config.deviceId.slice(-8)})`);
+
     const granted = await requestBlePermissions();
     if (!granted) {
+      AppLogger.log("ERROR", "Bluetooth / Nearby devices permissions denied by user", "error");
       throw new Error("Nearby devices / Bluetooth permissions are required. Please grant permissions in your phone settings.");
     }
+
     // Attempt join asynchronously without blocking local BLE hardware activation
     this.joinSession(config).catch(() => {
       // Offline / connecting
     });
+
     await this.rotateAndAdvertise(true);
     const ble = requireBleModule();
     this.subscription = subscribeToPeers((peer) => this.onPeer(peer));
     await ble.startScanning();
+    AppLogger.log("BLE", "Native BLE scanner started successfully in Low-Latency mode");
+
     this.timer = setInterval(() => void this.flushAndRotate(), BATCH_INTERVAL_MS);
     this.onStatus({ state: "running", peerCount: 0, wifiApCount: 0, rotatingId: this.rotatingId });
   }
 
   async stop() {
+    AppLogger.log("INFO", "Stopping presence service...");
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.subscription?.remove();
@@ -111,6 +125,7 @@ export class PresenceService {
     try {
       const ble = requireBleModule();
       await Promise.all([ble.stopAdvertising(), ble.stopScanning()]);
+      AppLogger.log("BLE", "BLE advertising and scanning stopped");
     } catch {
       // The app may be stopping before the native module is available.
     }
@@ -137,9 +152,14 @@ export class PresenceService {
     if (!peerPrefix) return;
 
     const now = Date.now();
+    const isNew = !this.activePeerCache.has(peerPrefix);
     this.peers.set(peerPrefix, peer);
     this.activePeerCache.set(peerPrefix, { peer, lastSeenAt: now });
     this.cleanExpiredPeers(now);
+
+    if (isNew) {
+      AppLogger.log("BLE", `Heard Peer: ${peerPrefix} (RSSI: ${peer.rssi} dBm)`);
+    }
 
     this.onStatus({
       state: "running",
@@ -153,7 +173,6 @@ export class PresenceService {
     if (!this.config) return;
     const nextToken = createRotatingId(this.config.deviceId);
     if (!force && nextToken === this.rotatingId && this.isAdvertising) {
-      // Token has not changed (still in the same 60s epoch) and transmitter is running.
       return;
     }
     this.rotatingId = nextToken;
@@ -166,9 +185,10 @@ export class PresenceService {
     try {
       await ble.startAdvertising(this.rotatingId);
       this.isAdvertising = true;
-    } catch {
-      // If hardware was temporarily busy, keep state and retry on next tick
+      AppLogger.log("BLE", `Broadcasting rotating token: ${this.rotatingId}`);
+    } catch (err: any) {
       this.isAdvertising = false;
+      AppLogger.log("WARN", `BLE advertise busy, retrying: ${err?.message || err}`, "warn");
     }
   }
 
@@ -184,12 +204,20 @@ export class PresenceService {
     const wifiFingerprint = rawWifi.length >= 3 ? rawWifi : this.lastKnownWifiFingerprint;
     this.lastWifiApCount = wifiFingerprint.length;
 
+    // Log Wi-Fi scan update
+    if (rawWifi.length >= 3) {
+      const topAp = [...rawWifi].sort((a, b) => b.rssi - a.rssi)[0];
+      AppLogger.log("WIFI", `Scanned ${rawWifi.length} APs (Strongest: ${topAp.ssid || topAp.bssid} ${topAp.rssi} dBm)`);
+    } else if (this.lastKnownWifiFingerprint.length > 0) {
+      AppLogger.log("WIFI", `Wi-Fi throttled by OS, using active buffer (${this.lastKnownWifiFingerprint.length} APs)`);
+    }
+
     // Native BLE Scanner Keep-Alive Watchdog:
-    // If running and 0 peers heard in this tick, pulse the native scanner to prevent OEM sleep
     if (this.peers.size === 0) {
       try {
         const ble = requireBleModule();
         await ble.startScanning();
+        AppLogger.log("BLE", "Watchdog: Pulsed BLE scanner to prevent Android power sleep");
       } catch {
         // Ignore keep-alive errors
       }
@@ -206,14 +234,21 @@ export class PresenceService {
     this.peers.clear();
     this.cleanExpiredPeers();
 
+    const tStart = Date.now();
     try {
-      await fetch(`${targetUrl}/api/observations`, {
+      const res = await fetch(`${targetUrl}/api/observations`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body)
       });
-    } catch {
-      // Keep BLE running smoothly even if temporary Wi-Fi jitter occurs
+      const latency = Date.now() - tStart;
+      if (res.ok) {
+        AppLogger.log("API", `Synced batch to cloud -> 200 OK (${latency}ms)`);
+      } else {
+        AppLogger.log("WARN", `Sync returned status ${res.status} (${latency}ms)`, "warn");
+      }
+    } catch (err: any) {
+      AppLogger.log("ERROR", `Sync failed: ${err?.message || "Network Error"}`, "error");
     }
 
     // Only restart hardware transmitter if 60s token epoch has actually changed
@@ -229,19 +264,31 @@ export class PresenceService {
 
   private async joinSession(config: StartConfig) {
     const targetUrl = config.apiUrl || DEFAULT_API_URL;
-    await fetch(`${targetUrl}/api/session/join`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(config)
-    });
+    try {
+      const res = await fetch(`${targetUrl}/api/session/join`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(config)
+      });
+      if (res.ok) {
+        AppLogger.log("API", `Session joined: ${config.sessionId} as ${config.role}`);
+      }
+    } catch (err: any) {
+      AppLogger.log("WARN", `Session join pending server wake: ${err?.message || "Offline"}`, "warn");
+    }
   }
 
   private async leaveSession(config: StartConfig) {
     const targetUrl = config.apiUrl || DEFAULT_API_URL;
-    await fetch(`${targetUrl}/api/session/leave`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ deviceId: config.deviceId })
-    });
+    try {
+      await fetch(`${targetUrl}/api/session/leave`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deviceId: config.deviceId })
+      });
+      AppLogger.log("API", "Session left");
+    } catch {
+      // Ignore
+    }
   }
 }
